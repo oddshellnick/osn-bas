@@ -1,0 +1,1 @@
+osn-bas is a Python library for browser automation and web scraping. It supports Chrome, Firefox, Edge, and Yandex, providing a consistent API for managing browser sessions, options, and common actions like scrolling, element interaction, and JavaScript execution.  It also facilitates remote webdriver control.
