@@ -7,7 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains, Keys
 from selenium.webdriver.remote.webelement import WebElement
 from osn_windows_cmd.taskkill.parameters import TaskKillTypes
-from osn_requests.user_agents import generate_random_user_agent
+from osn_requests.headers.user_agent import generate_random_user_agent_header
 from osn_windows_cmd.taskkill import (
 	ProcessID,
 	taskkill_windows
@@ -89,7 +89,7 @@ class BrowserOptionsManager:
 		if user_agent is not None:
 			self.user_agent = user_agent
 		else:
-			self.user_agent = [generate_random_user_agent()]
+			self.user_agent = [generate_random_user_agent_header()]
 		
 		self.options.add_argument(self.user_agent_command % " ".join(self.user_agent))
 	
