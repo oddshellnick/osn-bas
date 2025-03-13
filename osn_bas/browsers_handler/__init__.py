@@ -2,6 +2,7 @@ import sys
 import pathlib
 from typing import Optional
 from osn_bas.browsers_handler.types import Browser
+from osn_bas.errors import PlatformNotSupportedError
 from osn_bas.browsers_handler.windows import get_installed_browsers_win32
 
 
@@ -16,12 +17,12 @@ def get_installed_browsers() -> list[Browser]:
 		list[Browser]: A list of installed browsers. Each item in the list is a dictionary of type `Browser` containing information about the browser like name, version, and path.
 
 	Raises:
-		ValueError: If the operating system is not supported.
+		PlatformNotSupportedError: If the operating system is not supported.
 	"""
 	if sys.platform == "win32":
 		return get_installed_browsers_win32()
 	else:
-		raise ValueError(f"Unsupported platform: {sys.platform}")
+		raise PlatformNotSupportedError(sys.platform)
 
 
 def get_version_of_browser(browser_name: str) -> Optional[str]:

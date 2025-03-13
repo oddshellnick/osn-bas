@@ -4,6 +4,7 @@ import pathlib
 from subprocess import PIPE, Popen
 from typing import Optional, Union
 from osn_bas.webdrivers.types import JS_Scripts
+from osn_bas.errors import PlatformNotSupportedError
 from osn_windows_cmd.netstat import get_netstat_connections_data
 
 
@@ -93,7 +94,7 @@ def build_first_start_argument(browser_exe: Union[str, pathlib.Path]) -> str:
 		str: The constructed command line argument string.
 
 	Raises:
-		OSError: If the platform is not supported.
+		PlatformNotSupportedError: If the platform is not supported.
 		TypeError: If `browser_exe` is not of type str or pathlib.Path.
 	"""
 	if isinstance(browser_exe, str):
@@ -104,6 +105,6 @@ def build_first_start_argument(browser_exe: Union[str, pathlib.Path]) -> str:
 		elif sys.platform in ["linux", "darwin"]:
 			return f"cd \"{str(browser_exe.parent.resolve())}\" && ./{browser_exe.name}"
 		else:
-			raise OSError(f"Unsupported platform: {sys.platform}.")
+			raise PlatformNotSupportedError(f"Unsupported platform: {sys.platform}.")
 	else:
 		raise TypeError(f"browser_exe must be str or pathlib.Path, not {type(browser_exe)}.")
