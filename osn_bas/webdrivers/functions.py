@@ -100,7 +100,9 @@ def get_active_executables_table(browser_exe: Union[str, pathlib.Path]) -> DataF
 		return connections_data.loc[
 			(
 					connections_data["Executable"] == (browser_exe if isinstance(browser_exe, str) else browser_exe.name)
-			) & connections_data["Local Address"].str.contains(r"127\.0\.0\.1:\d+", regex=True, na=False) & (connections_data["State"] == "LISTENING")
+			) &
+			connections_data["Local Address"].str.contains(r"127\.0\.0\.1:\d+", regex=True, na=False) &
+			(connections_data["State"] == "LISTENING")
 		]
 	
 	raise PlatformNotSupportedError(f"Unsupported platform: {sys.platform}.")
