@@ -3,12 +3,12 @@ from setuptools import find_packages, setup
 
 
 def get_long_description() -> str:
-	long_description_path = pathlib.Path("long_description.md")
+	long_description_path = pathlib.Path("README.md")
 	
 	if long_description_path.is_file():
 		return open(long_description_path, "r", encoding="utf-8").read()
 	else:
-		raise FileNotFoundError("long_description.md not found")
+		raise FileNotFoundError("README.md not found")
 
 
 def get_install_requires() -> list[str]:
@@ -31,7 +31,7 @@ def get_description() -> str:
 
 setup(
 		name="osn-bas",
-		version="1.0.0",
+		version="1.1.0",
 		author="oddshellnick",
 		author_email="oddshellnick.programming@gmail.com",
 		description=get_description(),
@@ -39,4 +39,8 @@ setup(
 		long_description_content_type="text/markdown",
 		packages=find_packages(exclude=["unit_tests*"]),
 		install_requires=get_install_requires(),
+		package_data={
+			"osn_bas": ["webdrivers/js_scripts/*.js"],
+		},
+		include_package_data=True,
 )

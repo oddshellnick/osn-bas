@@ -1,3 +1,4 @@
+import pathlib
 from time import sleep
 from subprocess import Popen
 from random import choice, random
@@ -5,14 +6,20 @@ from typing import Any, Optional, Union
 from osn_bas.utilities import WindowRect
 from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains, Keys
+from osn_bas.webdrivers.types import WebdriverOption
 from selenium.webdriver.remote.webelement import WebElement
 from osn_windows_cmd.taskkill.parameters import TaskKillTypes
-from osn_requests.user_agents import generate_random_user_agent
 from osn_windows_cmd.taskkill import (
 	ProcessID,
 	taskkill_windows
 )
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+from selenium.webdriver.remote.remote_connection import RemoteConnection
+from osn_bas.webdrivers.functions import (
+	build_first_start_argument,
+	find_browser_previous_session,
+	read_js_scripts
+)
 from osn_windows_cmd.netstat import (
 	get_localhost_busy_ports,
 	get_localhost_minimum_free_port,
@@ -22,197 +29,280 @@ from osn_windows_cmd.netstat import (
 
 class BrowserOptionsManager:
 	"""
-	Manages browser options for Selenium webdriver.
+	Manages browser options for WebDriver.
+
+	This class is responsible for handling and setting browser options for Selenium WebDriver instances.
+	It provides methods to add, remove, and modify browser arguments and experimental options.
 
 	Attributes:
-		options: The browser options object.
-		debugging_port_command (str): Command-line argument for setting the debugging port.
-		user_agent_command (str): Command-line argument for setting the user agent.
-		proxy_command (str): Command-line argument for setting the proxy.
-		debugging_port (Optional[int]): The debugging port number. Defaults to None.
-		user_agent (Optional[list[str]]): The user agent string as a list of parts. Defaults to None.
-		proxy (Optional[Union[str, list[str]]]): The proxy server address or a list of addresses. Defaults to None.
-
-	:Usage:
-		options_manager = BrowserOptionsManager(
-				debugging_port_command="--remote-debugging-port=%s",
-				user_agent_command="--user-agent=%s",
-				proxy_command="--proxy-server=%s",
-				debugging_port=9222,
-				proxy="127.0.0.1:8080"
-		)
+	   options (Any): The WebDriver options object, specific to the browser type (e.g., ChromeOptions, FirefoxOptions). Initialized by `renew_webdriver_options`.
+	   debugging_port_command (str): Command line argument format string for setting the debugging port.
+	   user_agent_command (str): Command line argument format string for setting the user agent.
+	   proxy_command (str): Command line argument format string for setting the proxy.
 	"""
 	
 	def __init__(
 			self,
-			debugging_port_command: str,
-			user_agent_command: str,
-			proxy_command: str,
-			debugging_port: Optional[int] = None,
-			user_agent: Optional[list[str]] = None,
-			proxy: Optional[Union[str, list[str]]] = None,
+			debugging_port_command: WebdriverOption,
+			user_agent_command: WebdriverOption,
+			proxy_command: WebdriverOption,
 	):
 		"""
-		Initializes the BrowserOptionsManager.
+		Initializes BrowserOptionsManager with command templates.
 
 		Args:
-			debugging_port_command (str): Command-line argument for setting the debugging port.
-			user_agent_command (str): Command-line argument for setting the user agent.
-			proxy_command (str): Command-line argument for setting the proxy.
-			debugging_port (Optional[int]): The debugging port number. Defaults to None.
-			user_agent (Optional[list[str]]): The user agent string as a list. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): The proxy server address or a list of addresses. Defaults to None.
+			debugging_port_command (str): Command line argument format for debugging port.
+			user_agent_command (str): Command line argument format for user agent.
+			proxy_command (str): Command line argument format for proxy.
 		"""
 		self.options = self.renew_webdriver_options()
 		self.debugging_port_command = debugging_port_command
 		self.user_agent_command = user_agent_command
 		self.proxy_command = proxy_command
-		self.debugging_port = None
-		self.user_agent = None
-		self.proxy = None
-		
-		self.set_debugger_address(debugging_port)
-		
-		self.hide_automation()
-		
-		self.set_proxy(proxy)
-		
-		self.set_user_agent(user_agent)
 	
-	def set_user_agent(self, user_agent: Optional[list[str]] = None):
+	def renew_webdriver_options(self) -> Any:
 		"""
-		Sets the user agent for the browser.
+		Abstract method to renew WebDriver options. Must be implemented in child classes.
+
+		Returns:
+			Any: A new instance of WebDriver options (e.g., ChromeOptions, FirefoxOptions).
+		"""
+		raise NotImplementedError("This function must be implemented in child classes.")
+	
+	def hide_automation(self, hide: bool):
+		"""
+		Abstract method to hide browser automation. Must be implemented in child classes.
 
 		Args:
-			user_agent (Optional[list[str]]): The user agent string as a list. If None, a default user agent is used. Defaults to None.
+			hide (bool): Whether to enable or disable hiding automation features.
 		"""
-		if user_agent is not None:
-			self.user_agent = user_agent
+		raise NotImplementedError("This function must be implemented in child classes.")
+	
+	def remove_experimental_option(self, experimental_option_name: str):
+		"""
+		Removes an experimental browser option by its attribute name.
+
+		Args:
+			experimental_option_name (str): Attribute name of the experimental option to remove.
+		"""
+		if hasattr(self, experimental_option_name):
+			experimental_option = getattr(self, experimental_option_name)
+		
+			if experimental_option[0] in self.options.experimental_options:
+				self.options.experimental_options.pop(experimental_option[0])
+				delattr(self, experimental_option_name)
+	
+	def remove_argument(self, argument_name: str):
+		"""
+		Removes a browser argument by its attribute name.
+
+		Args:
+			argument_name (str): Attribute name of the argument to remove.
+		"""
+		if hasattr(self, argument_name):
+			argument = getattr(self, argument_name)
+		
+			if argument in self.options.arguments:
+				self.options.arguments.remove(argument)
+				delattr(self, argument_name)
+	
+	def remove_option(self, option: WebdriverOption):
+		"""
+		Removes a browser option by its configuration object.
+
+		This method removes a browser option, whether it's a normal argument or an experimental option, based on the provided `WebdriverOption` configuration.
+
+		Args:
+			option (WebdriverOption): The configuration object defining the option to be removed.
+
+		Raises:
+			ValueError: If the option type is not recognized.
+		"""
+		if option["type"] == "normal":
+			self.remove_argument(option["name"])
+		elif option["type"] == "experimental":
+			self.remove_experimental_option(option["name"])
+		elif option["type"] is None:
+			pass
 		else:
-			self.user_agent = [generate_random_user_agent()]
-		
-		self.options.add_argument(self.user_agent_command % " ".join(self.user_agent))
+			raise ValueError(f"Unknown option type ({option}).")
 	
-	def set_proxy(self, proxy: Optional[Union[str, list[str]]] = None):
+	def set_experimental_option(
+			self,
+			experimental_option_name: str,
+			experimental_option: str,
+			value: Any
+	):
 		"""
-		Sets the proxy server for the browser.
+		Sets an experimental browser option.
 
 		Args:
-			proxy (Optional[Union[str, list[str]]]): The proxy server address, or a list of addresses. If a list is provided, a random proxy is chosen. Defaults to None.
+			experimental_option_name (str): Name to store the experimental option under (attribute name in the class).
+			experimental_option (str): Experimental option name.
+			value (Any): Value for the experimental option.
 		"""
-		self.proxy = proxy
+		self.remove_experimental_option(experimental_option_name)
 		
-		if self.proxy is not None:
-			if isinstance(self.proxy, str):
-				self.options.add_argument(self.proxy_command % self.proxy)
-			else:
-				self.options.add_argument(self.proxy_command % choice(self.proxy))
+		self.options.add_experimental_option(experimental_option, value)
+		setattr(self, experimental_option_name, (experimental_option, value))
 	
-	def hide_automation(self):
+	def set_argument(self, argument_name: str, argument: str, value: Optional[str] = None):
 		"""
-		Hides browser automation flags (currently a placeholder).
+		Sets a browser argument.
+
+		Args:
+			argument_name (str): Name to store the argument under (attribute name in the class).
+			argument (str): Argument format string, may contain '{value}' placeholder.
+			value (Optional[str]): Value to insert into the argument format string. Defaults to None.
 		"""
-		pass
+		self.remove_argument(argument_name)
+		
+		if value is not None:
+			argument_line = argument.format(value=value)
+		else:
+			argument_line = argument
+		
+		self.options.add_argument(argument_line)
+		setattr(self, argument_name, argument_line)
+	
+	def set_option(self, option: WebdriverOption, value: Any):
+		"""
+		Sets a browser option based on its configuration object.
+
+		This method configures a browser option, handling both normal arguments and experimental options as defined in the provided `WebdriverOption`.
+		It uses the option's type to determine the appropriate method for setting the option with the given value.
+
+		Args:
+			option (WebdriverOption): A dictionary-like object containing the configuration for the option to be set.
+			value (Any): The value to be set for the option. The type and acceptable values depend on the specific browser option being configured.
+
+		Raises:
+			ValueError: If the option type is not recognized.
+		"""
+		if option["type"] == "normal":
+			self.set_argument(option["name"], option["command"], value)
+		elif option["type"] == "experimental":
+			self.set_experimental_option(option["name"], option["command"], value)
+		elif option["type"] is None:
+			pass
+		else:
+			raise ValueError(f"Unknown option type ({option}).")
 	
 	def set_debugger_address(self, debugging_port: Optional[int]):
 		"""
-		Sets the debugger address for the browser.
+		Sets the debugger address experimental option.
 
 		Args:
-			debugging_port (Optional[int]): The debugging port number.
+			debugging_port (Optional[int]): Debugging port number. If None, removes the debugger-address option. Defaults to None.
 		"""
-		self.debugging_port = debugging_port
+		if debugging_port is not None:
 		
-		if self.debugging_port is not None:
-			self.options.debugger_address = self.debugging_port_command % self.debugging_port
+			self.set_option(self.debugging_port_command, f"127.0.0.1:{debugging_port}")
+		else:
+			self.remove_option(self.debugging_port_command)
 	
-	def renew_webdriver_options(self) -> None:
+	def set_proxy(self, proxy: Optional[Union[str, list[str]]] = None):
 		"""
-		Creates and returns a new browser options object (currently a placeholder).
+		Sets the proxy browser option.
 
-		Returns:
-			 None: The new browser options object.
+		Args:
+			proxy (Optional[Union[str, list[str]]]): Proxy string or list of proxy strings. If a list, a random proxy is chosen. If None, removes the proxy argument. Defaults to None.
 		"""
-		return None
+		if proxy is not None:
+			if isinstance(proxy, list):
+				proxy = choice(proxy)
+		
+			self.set_option(self.proxy_command, proxy)
+		else:
+			self.remove_option(self.proxy_command)
+	
+	def set_user_agent(self, user_agent: Optional[str] = None):
+		"""
+		Sets the user agent browser option.
+
+		Args:
+			user_agent (Optional[str]): User agent string to set. If None, removes the user-agent argument. Defaults to None.
+		"""
+		if user_agent is not None:
+			self.set_option(self.user_agent_command, user_agent)
+		else:
+			self.remove_option(self.user_agent_command)
 
 
 class BrowserStartArgs:
 	"""
-	Manages the command-line arguments for starting a web browser.
+	Manages browser start arguments for subprocess execution.
+
+	This class constructs and manages the command line arguments used to start a browser subprocess.
+	It allows setting and updating various arguments like debugging port, profile directory, user agent, headless mode, mute audio, and proxy server.
 
 	Attributes:
-		start_command (str): The assembled start command.
-		browser_exe (str): Path to the browser executable.
-		debugging_port_command_line (str): Command-line argument for the debugging port.
-		profile_dir_command_line (str): Command-line argument for the webdriver directory.
-		headless_mode_command_line (str): Command-line argument for headless mode.
-		mute_audio_command_line (str): Command-line argument for muting audio.
-		debugging_port (int): The debugging port number. Defaults to None.
-		webdriver_dir (str): The webdriver directory. Defaults to None.
-		headless_mode (bool): Whether to run in headless mode. Defaults to False.
-		mute_audio (bool): Whether to mute audio. Defaults to False.
-
-	:Usage:
-		start_args = BrowserStartArgs(
-				browser_file_name="chrome.exe",
-				debugging_port_command_line="--remote-debugging-port=%s",
-				webdriver_dir_command_line="--webdriver-dir=%s",
-				headless_mode_command_line="--headless",
-				mute_audio_command_line="--mute-audio"
-		)
+		browser_exe (Union[str, pathlib.Path]): Path to the browser executable or just the executable name.
+		debugging_port_command_line (str): Command line argument format string for debugging port.
+		profile_dir_command_line (str): Command line argument format string for profile directory.
+		headless_mode_command_line (str): Command line argument for headless mode.
+		mute_audio_command_line (str): Command line argument for muting audio.
+		user_agent_command_line (str): Command line argument format string for user agent.
+		proxy_server_command_line (str): Command line argument format string for proxy server.
+		debugging_port (Optional[int]): Current debugging port, defaults to None.
+		profile_dir (Optional[str]): Current profile directory path, defaults to None.
+		headless_mode (Optional[bool]): Current headless mode status, defaults to None.
+		mute_audio (Optional[bool]): Current mute audio status, defaults to None.
+		user_agent (Optional[str]): Current user agent string, defaults to None.
+		proxy_server (Optional[str]): Current proxy server string, defaults to None.
+		start_command (str): The full constructed start command string.
 	"""
-	
-	start_command = ""
 	
 	def __init__(
 			self,
-			browser_exe: str,
+			browser_exe: Union[str, pathlib.Path],
 			debugging_port_command_line: str,
 			profile_dir_command_line: str,
 			headless_mode_command_line: str,
 			mute_audio_command_line: str,
-			webdriver_dir: Optional[str] = None,
-			debugging_port: Optional[int] = None,
-			headless_mode: bool = False,
-			mute_audio: bool = False,
+			user_agent_command_line: str,
+			proxy_server_command_line: str,
 	):
 		"""
-		Initializes BrowserStartArgs with browser settings.
+		Initializes BrowserStartArgs with browser executable and command line templates.
 
 		Args:
-			browser_exe (str): Path to the browser executable.
-			debugging_port_command_line (str): Command-line argument for the debugging port.
-			profile_dir_command_line (str): Command-line argument for the profile directory.
-			headless_mode_command_line (str): Command-line argument for headless mode.
-			mute_audio_command_line (str): Command-line argument for muting audio.
-			webdriver_dir (Optional[str]): The webdriver directory. Defaults to None.
-			debugging_port (Optional[int]): The debugging port number. Defaults to None.
-			headless_mode (bool): Whether to run in headless mode. Defaults to False.
-			mute_audio (bool): Whether to mute audio. Defaults to False.
+			browser_exe (Union[str, pathlib.Path]): Path to the browser executable or just the executable name.
+			debugging_port_command_line (str): Command line argument format for debugging port.
+			profile_dir_command_line (str): Command line argument format for profile directory.
+			headless_mode_command_line (str): Command line argument for headless mode.
+			mute_audio_command_line (str): Command line argument for mute audio.
+			user_agent_command_line (str): Command line argument format for user agent.
+			proxy_server_command_line (str): Command line argument format for proxy server.
 		"""
 		self.browser_exe = browser_exe
 		self.debugging_port_command_line = debugging_port_command_line
 		self.profile_dir_command_line = profile_dir_command_line
 		self.headless_mode_command_line = headless_mode_command_line
 		self.mute_audio_command_line = mute_audio_command_line
-		self.debugging_port = debugging_port
-		self.webdriver_dir = webdriver_dir
-		self.headless_mode = headless_mode
-		self.mute_audio = mute_audio
+		self.user_agent_command_line = user_agent_command_line
+		self.proxy_server_command_line = proxy_server_command_line
+		self.debugging_port = None
+		self.profile_dir = None
+		self.headless_mode = None
+		self.mute_audio = None
+		self.user_agent = None
+		self.proxy_server = None
+		self.start_command = build_first_start_argument(self.browser_exe)
 		
 		self.update_command()
 	
 	def update_command(self):
 		"""
-		Assembles the browser start command based on the current settings.
+		Updates the start command string based on current settings.
 		"""
-		start_args = [self.browser_exe]
+		start_args = [build_first_start_argument(self.browser_exe)]
 		
 		if self.debugging_port is not None:
-			start_args.append(self.debugging_port_command_line % self.debugging_port)
+			start_args.append(self.debugging_port_command_line.format(value=self.debugging_port))
 		
-		if self.webdriver_dir is not None:
-			start_args.append(self.profile_dir_command_line % self.webdriver_dir)
+		if self.profile_dir is not None:
+			start_args.append(self.profile_dir_command_line.format(value=self.profile_dir))
 		
 		if self.headless_mode:
 			start_args.append(self.headless_mode_command_line)
@@ -220,25 +310,33 @@ class BrowserStartArgs:
 		if self.mute_audio is not None:
 			start_args.append(self.mute_audio_command_line)
 		
+		if self.user_agent is not None:
+			start_args.append(self.user_agent_command_line.format(value=self.user_agent))
+		
+		if self.proxy_server is not None:
+			start_args.append(self.proxy_server_command_line.format(value=self.proxy_server))
+		
 		self.start_command = " ".join(start_args)
 	
 	def clear_command(self):
 		"""
-		Clears the start command and resets the settings to default values.
+		Clears all optional arguments from the start command, resetting to the base executable.
 		"""
 		self.debugging_port = None
-		self.webdriver_dir = None
+		self.profile_dir = None
 		self.headless_mode = False
 		self.mute_audio = False
+		self.user_agent = None
+		self.proxy_server = False
 		
 		self.update_command()
 	
 	def set_debugging_port(self, debugging_port: Optional[int] = None):
 		"""
-		Sets the debugging port.
+		Sets the debugging port argument and updates the start command.
 
 		Args:
-			debugging_port (Optional[int]): The debugging port number. Defaults to None.
+			debugging_port (Optional[int]): Debugging port number to set. If None, removes debugging port argument. Defaults to None.
 		"""
 		self.debugging_port = debugging_port
 		
@@ -246,10 +344,10 @@ class BrowserStartArgs:
 	
 	def set_headless_mode(self, headless_mode: bool = False):
 		"""
-		Sets headless mode.
+		Sets the headless mode argument and updates the start command.
 
 		Args:
-			headless_mode (bool): Whether to enable headless mode. Defaults to False.
+			headless_mode (bool): Boolean value to enable or disable headless mode. Defaults to False.
 		"""
 		self.headless_mode = headless_mode
 		
@@ -257,23 +355,48 @@ class BrowserStartArgs:
 	
 	def set_mute_audio(self, mute_audio: bool = False):
 		"""
-		Sets whether to mute audio.
+		Sets the mute audio argument and updates the start command.
 
 		Args:
-			mute_audio (bool): Whether to mute audio. Defaults to False.
+			mute_audio (bool): Boolean value to enable or disable mute audio. Defaults to False.
 		"""
 		self.mute_audio = mute_audio
 		
 		self.update_command()
 	
-	def set_webdriver_dir(self, webdriver_dir: Optional[str] = None):
+	def set_profile_dir(self, profile_dir: Optional[str] = None):
 		"""
-		Sets the webdriver directory.
+		Sets the profile directory argument and updates the start command.
 
 		Args:
-			webdriver_dir (Optional[str]): The webdriver directory path. Defaults to None.
+			profile_dir (Optional[str]): Profile directory path to set. If None, removes profile directory argument. Defaults to None.
 		"""
-		self.webdriver_dir = webdriver_dir
+		self.profile_dir = profile_dir
+		
+		self.update_command()
+	
+	def set_proxy_server(self, proxy_server: Optional[Union[str, list[str]]] = None):
+		"""
+		Sets the proxy server argument and updates the start command.
+
+		Args:
+			proxy_server (Optional[Union[str, list[str]]]): Proxy server string to set. If None, removes proxy server argument. Defaults to None. Can be a single proxy string or list of proxy strings, in which case a random proxy will be chosen.
+		"""
+		if isinstance(proxy_server, list):
+			proxy_server = choice(proxy_server)
+		
+		self.proxy_server = proxy_server
+		
+		self.update_command()
+	
+	def set_user_agent(self, user_agent: Optional[str] = None):
+		"""
+		Sets the user agent argument and updates the start command.
+
+		Args:
+			user_agent (Optional[str]): User agent string to set. If None, removes user agent argument. Defaults to None.
+		"""
+		self.user_agent = user_agent
 		
 		self.update_command()
 
@@ -282,13 +405,13 @@ class EmptyWebDriver:
 	"""
 	Provides a simplified interface for interacting with a web driver.
 
-	Attributes:
-		base_implicitly_wait (int): The base implicit wait time in seconds.
-		base_page_load_timeout (int): The base page load timeout in seconds.
-		driver (webdriver): The underlying webdriver instance (initialized to None).
+	This class serves as a base for creating WebDriver wrappers, offering a set of commonly used WebDriver actions.
+	It is designed to be extended, providing basic functionalities without browser-specific implementations.
 
-	:Usage:
-		driver = EmptyWebDriver(implicitly_wait=10, page_load_timeout=30)
+	Attributes:
+		base_implicitly_wait (int): The base implicit wait time in seconds for element searching.
+		base_page_load_timeout (int): The base page load timeout in seconds for page loading.
+		driver (webdriver): The underlying WebDriver instance, initialized to None and set upon driver creation in subclasses.
 	"""
 	
 	def __init__(self, implicitly_wait: int = 5, page_load_timeout: int = 5):
@@ -296,11 +419,12 @@ class EmptyWebDriver:
 		Initializes an instance of the EmptyWebDriver class.
 
 		Args:
-			implicitly_wait (int): The base implicit wait time in seconds.
-			page_load_timeout (int): The base page load timeout in seconds.
+			implicitly_wait (int): The base implicit wait time in seconds. Defaults to 5.
+			page_load_timeout (int): The base page load timeout in seconds. Defaults to 5.
 		"""
 		self.base_implicitly_wait = implicitly_wait
 		self.base_page_load_timeout = page_load_timeout
+		self.js_scripts = read_js_scripts()
 		self.driver = None
 	
 	def switch_to_window(self, window: Optional[Union[str, int]] = None):
@@ -309,11 +433,6 @@ class EmptyWebDriver:
 
 		Args:
 			window (Optional[Union[str, int]]): The name, index, or handle of the window to switch to. If None, switches to the current window. Defaults to None.
-
-		:Usage:
-			driver.switch_to_window("window_name")
-			driver.switch_to_window(1) # Switch to the second window
-			driver.switch_to_window() # Stays at current window
 		"""
 		if isinstance(window, str):
 			self.driver.switch_to.window(window)
@@ -364,8 +483,8 @@ class EmptyWebDriver:
 		Updates the implicit wait and page load timeout.
 
 		Args:
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds. Defaults to None.
 		"""
 		if temp_implicitly_wait:
 			implicitly_wait = temp_implicitly_wait + random()
@@ -392,11 +511,11 @@ class EmptyWebDriver:
 		Finds a single web element within another element.
 
 		Args:
-			parent_element (WebElement): The parent web element.
-			by (By): Locator strategy.
-			value (str): Locator value.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			parent_element (WebElement): The parent web element to search within.
+			by (By): Locator strategy (e.g., By.ID, By.XPATH).
+			value (str): Locator value (e.g., "elementId", "//xpath/to/element").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
 
 		Returns:
 			WebElement: The found web element.
@@ -416,11 +535,11 @@ class EmptyWebDriver:
 		Finds multiple web elements within another element.
 
 		Args:
-			parent_element (WebElement): The parent web element.
-			by (By): Locator strategy.
-			value (str): Locator value.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			parent_element (WebElement): The parent web element to search within.
+			by (By): Locator strategy (e.g., By.CLASS_NAME, By.CSS_SELECTOR).
+			value (str): Locator value (e.g., "className", "css.selector").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
 
 		Returns:
 			list[WebElement]: A list of found web elements.
@@ -436,19 +555,16 @@ class EmptyWebDriver:
 			temp_page_load_timeout: Optional[int] = None
 	) -> list[WebElement]:
 		"""
-		Finds multiple web elements.
+		Finds multiple web elements on the page.
 
 		Args:
-			by (By): Locator strategy.
-			value (str): Locator value.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			by (By): Locator strategy (e.g., By.TAG_NAME, By.LINK_TEXT).
+			value (str): Locator value (e.g., "div", "Click Here").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
 
 		Returns:
 			list[WebElement]: A list of found web elements.
-
-		:Usage:
-			elements = driver.find_elements(By.CLASS_NAME, "foo")
 		"""
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
 		return self.driver.find_elements(by, value)
@@ -490,16 +606,7 @@ class EmptyWebDriver:
 		Returns:
 			dict[str, str]: A dictionary where keys are CSS property names and values are their computed values.
 		"""
-		script = """
-		var items = {};
-		var computedStyle = getComputedStyle(arguments[0]);
-		for (var i = 0; i < computedStyle.length; i++) {
-			items[computedStyle[i]] = computedStyle.getPropertyValue(computedStyle[i]);
-		}
-		return items;
-		"""
-		
-		return self.execute_js_script(script, element)
+		return self.execute_js_script(self.js_scripts["get_element_css"], element)
 	
 	def hover_element(self, element: WebElement):
 		"""
@@ -513,7 +620,7 @@ class EmptyWebDriver:
 	@property
 	def html(self) -> str:
 		"""
-		Gets the current page source
+		Gets the current page source.
 
 		Returns:
 			str: The page source.
@@ -527,7 +634,7 @@ class EmptyWebDriver:
 		Args:
 			link (str): URL to open in the new tab. Defaults to "".
 		"""
-		self.execute_js_script(f"window.open(\"{link}\");")
+		self.execute_js_script(self.js_scripts["open_new_tab"], link)
 	
 	@property
 	def rect(self) -> WindowRect:
@@ -535,7 +642,7 @@ class EmptyWebDriver:
 		Gets the window rectangle.
 
 		Returns:
-			WindowRect: The window rectangle.
+			WindowRect: The window rectangle object containing x, y, width, and height.
 		"""
 		window_rect = self.driver.get_window_rect()
 		
@@ -557,8 +664,8 @@ class EmptyWebDriver:
 		Scrolls the viewport by a specified amount.
 
 		Args:
-			x (int): Horizontal scroll amount. Defaults to 0.
-			y (int): Vertical scroll amount. Defaults to 0.
+			x (int): Horizontal scroll amount in pixels. Defaults to 0.
+			y (int): Vertical scroll amount in pixels. Defaults to 0.
 		"""
 		ActionChains(self.driver).scroll_by_amount(x, y).perform()
 	
@@ -570,30 +677,27 @@ class EmptyWebDriver:
 			temp_page_load_timeout: Optional[int] = None
 	) -> WebElement:
 		"""
-		Finds a single web element.
+		Finds a single web element on the page.
 
 		Args:
-			by (By): Locator strategy.
-			value (str): Locator value.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			by (By): Locator strategy (e.g., By.ID, By.NAME).
+			value (str): Locator value (e.g., "loginForm", "username").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
 
 		Returns:
 			WebElement: The found web element.
-
-		:Usage:
-			element = driver.find_element(By.ID, "foo")
 		"""
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
 		return self.driver.find_element(by, value)
 	
 	def scroll_down_of_element(self, by: By, value: str):
 		"""
-		Scrolls down within a specific element.
+		Scrolls down within a specific element using PAGE_DOWN key.
 
 		Args:
-			by (By): Locator Strategy.
-			value (str): Locator Value.
+			by (By): Locator Strategy (e.g., By.ID, By.CLASS_NAME).
+			value (str): Locator Value (e.g., "scrollableDiv", "content-area").
 		"""
 		self.find_web_element(by, value).send_keys(Keys.PAGE_DOWN)
 	
@@ -602,9 +706,9 @@ class EmptyWebDriver:
 		Scrolls from a specific origin by a specified amount.
 
 		Args:
-			origin (ScrollOrigin): The scroll origin.
-			x (int): Horizontal scroll amount. Defaults to 0.
-			y (int): Vertical scroll amount. Defaults to 0.
+			origin (ScrollOrigin): The scroll origin (e.g., ScrollOrigin.viewport, ScrollOrigin.element).
+			x (int): Horizontal scroll amount in pixels. Defaults to 0.
+			y (int): Vertical scroll amount in pixels. Defaults to 0.
 
 		Raises:
 			MoveTargetOutOfBoundsException: If the origin with offset is outside the viewport.
@@ -622,11 +726,11 @@ class EmptyWebDriver:
 	
 	def scroll_up_of_element(self, by: By, value: str):
 		"""
-		Scrolls up within a specific element.
+		Scrolls up within a specific element using PAGE_UP key.
 
 		Args:
-			by (By): Locator strategy.
-			value (str): Locator value.
+			by (By): Locator strategy (e.g., By.CSS_SELECTOR, By.XPATH).
+			value (str): Locator value (e.g., ".scroll-container", "//div[@class='scroll-area']").
 		"""
 		self.find_web_element(by, value).send_keys(Keys.PAGE_UP)
 	
@@ -641,23 +745,35 @@ class EmptyWebDriver:
 
 		Args:
 			url (str): The URL to open.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout. Defaults to None.
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for page load. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for page load. Defaults to None.
 		"""
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
 		self.driver.get(url)
 	
-	def stop_browser_loading(self):
+	def stop_window_loading(self):
 		"""
 		Stops the current page loading.
 		"""
-		self.execute_js_script("window.stop();")
+		self.execute_js_script(self.js_scripts["stop_window_loading"])
 	
 	def switch_to_frame(self, frame: Union[str, int, WebElement]):
+		"""
+		Switches the driver's focus to a frame.
+
+		Args:
+			frame (Union[str, int, WebElement]): The frame to switch to. Can be a frame name, index, or WebElement.
+		"""
 		self.driver.switch_to.frame(frame)
 	
 	@property
-	def window(self):
+	def window(self) -> str:
+		"""
+		Gets the current window handle.
+
+		Returns:
+			str: The current window handle.
+		"""
 		return self.driver.current_window_handle
 	
 	@property
@@ -673,216 +789,337 @@ class EmptyWebDriver:
 
 class BrowserWebDriver(EmptyWebDriver):
 	"""
-	Manages a Selenium webdriver instance, including starting, stopping, and restarting the browser.
+	Extends EmptyWebDriver to manage a browser instance lifecycle.
+
+	This class inherits from `EmptyWebDriver` and adds functionality to manage the lifecycle of a browser instance,
+	including starting, stopping, and restarting the browser with various configurations.
 
 	Attributes:
-		browser_exe (str): Path to the browser executable.
-		bsa_debugging_port_command_line (str): BrowserStartArgs command-line argument for debugging port.
-		bsa_webdriver_dir_command_line (str): BrowserStartArgs command-line argument for webdriver directory.
-		bsa_headless_mode_command_line (str): BrowserStartArgs command-line argument for headless mode.
-		bsa_mute_audio_command_line (str): BrowserStartArgs command-line argument for muting audio.
-		bom_debugging_port_command (str): BrowserOptionsManager command for debugging port.
-		bom_user_agent_command (str): BrowserOptionsManager command for user agent.
-		bom_proxy_command (str): BrowserOptionsManager command for proxy.
-		webdriver_path (str): Path to the webdriver executable.
-		webdriver_start_args (BrowserStartArgs): Manages browser start-up arguments.
+		browser_exe (Union[str, pathlib.Path]): Path to the browser executable or just the executable name.
+		webdriver_path (str): Path to the WebDriver executable.
+		window_rect (WindowRect): Object to store window rectangle settings.
+		webdriver_start_args (BrowserStartArgs): Manages browser start arguments.
 		webdriver_options_manager (BrowserOptionsManager): Manages browser options.
-		debugging_port (Optional[int]): The debugging port number. Defaults to None.
-		webdriver_dir (Optional[str]): The webdriver directory. Defaults to None.
-		headless_mode (bool): Whether to run in headless mode. Defaults to False.
-		mute_audio (bool): Whether to mute audio. Defaults to False.
-		user_agent (Optional[list[str]]): The user agent. Defaults to None.
-		proxy (Optional[Union[str, list[str]]]): The proxy server(s). Defaults to None.
-		window_rect (WindowRect): The browser window rectangle.
-		webdriver_is_active (bool): Indicates if the webdriver is currently active.
-		webdriver_service (Optional[Service]): The webdriver service. Defaults to None.
-		webdriver_options (Optional[Options]): The webdriver options. Defaults to None.
+		webdriver_is_active (bool): Flag indicating if the WebDriver is currently active.
+		base_implicitly_wait (int): Inherited from EmptyWebDriver, base implicit wait time.
+		base_page_load_timeout (int): Inherited from EmptyWebDriver, base page load timeout.
+		driver (webdriver): Inherited from EmptyWebDriver, the WebDriver instance.
 	"""
 	
 	def __init__(
 			self,
-			browser_exe: str,
-			bsa_debugging_port_command_line: str,
-			bsa_webdriver_dir_command_line: str,
-			bsa_headless_mode_command_line: str,
-			bsa_mute_audio_command_line: str,
-			bom_debugging_port_command: str,
-			bom_user_agent_command: str,
-			bom_proxy_command: str,
+			browser_exe: Union[str, pathlib.Path],
 			webdriver_path: str,
-			webdriver_start_args: Optional[BrowserStartArgs] = None,
-			webdriver_options_manager: Optional[BrowserOptionsManager] = None,
+			webdriver_start_args: type = BrowserStartArgs,
+			webdriver_options_manager: type = BrowserOptionsManager,
+			debugging_port: Optional[int] = None,
+			profile_dir: Optional[str] = None,
+			headless_mode: Optional[bool] = None,
+			mute_audio: Optional[bool] = None,
+			proxy: Optional[Union[str, list[str]]] = None,
+			user_agent: Optional[str] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
-			window_rect: WindowRect = WindowRect(),
+			window_rect: Optional[WindowRect] = None,
 	):
 		"""
-		Initializes a new instance of the BrowserWebDriver class.
+		Initializes BrowserWebDriver with browser and WebDriver paths, and settings.
 
 		Args:
-			browser_exe (str): Path to the browser executable.
-			bsa_debugging_port_command_line (str): BrowserStartArgs command-line argument for debugging port.
-			bsa_webdriver_dir_command_line (str): BrowserStartArgs command-line argument for webdriver directory.
-			bsa_headless_mode_command_line (str): BrowserStartArgs command-line argument for headless mode.
-			bsa_mute_audio_command_line (str): BrowserStartArgs command-line argument for muting audio.
-			bom_debugging_port_command (str): BrowserOptionsManager command for debugging port.
-			bom_user_agent_command (str): BrowserOptionsManager command for user agent.
-			bom_proxy_command (str): BrowserOptionsManager command for proxy.
-			webdriver_path (str): Path to the webdriver executable.
-			webdriver_start_args (Optional[BrowserStartArgs]): Manages browser start-up arguments. Defaults to None.
-			webdriver_options_manager (Optional[BrowserOptionsManager]): Manages browser options. Defaults to None.
-			implicitly_wait (int): Implicit wait time in seconds. Defaults to 5.
-			page_load_timeout (int): Page load timeout in seconds. Defaults to 5.
-			window_rect (WindowRect): Initial browser window rectangle. Defaults to WindowRect().
+			browser_exe (Union[str, pathlib.Path]): Path to the browser executable or just the executable name.
+			webdriver_path (str): Path to the WebDriver executable.
+			webdriver_start_args (type): Class type for managing browser start arguments. Defaults to BrowserStartArgs.
+			webdriver_options_manager (type): Class type for managing browser options. Defaults to BrowserOptionsManager.
+			debugging_port (Optional[int]): Debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
+			user_agent (Optional[str]): User agent string to use. Defaults to None.
+			implicitly_wait (int): Base implicit wait time for WebDriver operations. Defaults to 5.
+			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
 		"""
 		super().__init__(implicitly_wait, page_load_timeout)
 		
+		if window_rect is None:
+			window_rect = WindowRect()
+		
 		self.browser_exe = browser_exe
-		self.bsa_debugging_port_command_line = bsa_debugging_port_command_line
-		self.bsa_webdriver_dir_command_line = bsa_webdriver_dir_command_line
-		self.bsa_headless_mode_command_line = bsa_headless_mode_command_line
-		self.bsa_mute_audio_command_line = bsa_mute_audio_command_line
-		self.bom_debugging_port_command = bom_debugging_port_command
-		self.bom_user_agent_command = bom_user_agent_command
-		self.bom_proxy_command = bom_proxy_command
 		self.webdriver_path = webdriver_path
-		
-		if webdriver_start_args is not None:
-			self.webdriver_start_args = webdriver_start_args
-		else:
-			self.webdriver_start_args = BrowserStartArgs(
-					self.browser_exe,
-					self.bsa_debugging_port_command_line,
-					self.bsa_webdriver_dir_command_line,
-					self.bsa_headless_mode_command_line,
-					self.bsa_mute_audio_command_line,
-			)
-		
-		if webdriver_options_manager is not None:
-			self.webdriver_options_manager = webdriver_options_manager
-		else:
-			self.webdriver_options_manager = BrowserOptionsManager(
-					self.bom_debugging_port_command,
-					self.bom_user_agent_command,
-					self.bom_proxy_command
-			)
-		
-		self.webdriver_dir, self.headless_mode, self.mute_audio = (
-				self.webdriver_start_args.webdriver_dir,
-				self.webdriver_start_args.headless_mode,
-				self.webdriver_start_args.mute_audio,
-		)
-		
-		self.user_agent, self.proxy = self.webdriver_options_manager.user_agent, self.webdriver_options_manager.proxy
-		
-		if (
-				self.webdriver_options_manager.debugging_port is not None
-				and self.webdriver_start_args.debugging_port is not None
-		):
-			self.debugging_port = self.webdriver_options_manager.debugging_port
-		elif self.webdriver_options_manager.debugging_port is not None:
-			self.debugging_port = self.webdriver_options_manager.debugging_port
-			self.webdriver_start_args.set_debugging_port(self.debugging_port)
-		elif self.webdriver_start_args.debugging_port is not None:
-			self.debugging_port = self.webdriver_start_args.debugging_port
-			self.webdriver_options_manager.set_debugger_address(self.debugging_port)
-		else:
-			self.debugging_port = None
-		
 		self.window_rect = window_rect
+		
+		self.webdriver_start_args = webdriver_start_args(browser_exe=browser_exe)
+		
+		self.webdriver_options_manager = webdriver_options_manager()
 		self.webdriver_is_active = False
-		self.webdriver_service, self.webdriver_options = None, None
+		
+		self.update_settings(
+				debugging_port=debugging_port,
+				profile_dir=profile_dir,
+				headless_mode=headless_mode,
+				mute_audio=mute_audio,
+				proxy=proxy,
+				user_agent=user_agent
+		)
+	
+	def get_vars_for_remote(self):
+		"""
+		Gets variables necessary to create a remote WebDriver instance.
+
+		Returns:
+			tuple: A tuple containing the command executor URL and session ID of the WebDriver.
+		"""
+		return self.driver.command_executor, self.driver.session_id
+	
+	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
+		"""
+		Connects to an existing remote WebDriver session.
+
+		This method establishes a connection to a remote Selenium WebDriver server and reuses an existing browser session, instead of creating a new one.
+		It's useful when you want to attach to an already running browser instance, managed by a remote WebDriver service like Selenium Grid or cloud-based Selenium providers.
+
+		Args:
+			command_executor (Union[str, RemoteConnection]): The URL of the remote WebDriver server or a `RemoteConnection` object.
+			session_id (str): The ID of the existing WebDriver session to connect to.
+		"""
+		raise NotImplementedError("This function must be implemented in child classes.")
+	
+	def set_user_agent(self, user_agent: Optional[str]):
+		"""
+		Sets the user agent.
+
+		Args:
+			user_agent (Optional[str]): User agent string to use.
+		"""
+		self.webdriver_start_args.set_user_agent(user_agent)
+		self.webdriver_options_manager.set_user_agent(user_agent)
+	
+	def set_headless_mode(self, headless_mode: bool):
+		"""
+		Sets headless mode.
+
+		Args:
+			headless_mode (bool): Whether to start the browser in headless mode.
+		"""
+		self.webdriver_start_args.set_headless_mode(headless_mode)
+	
+	def set_mute_audio(self, mute_audio: bool):
+		"""
+		Sets mute audio mode.
+
+		Args:
+			mute_audio (bool): Whether to mute audio in the browser.
+		"""
+		self.webdriver_start_args.set_mute_audio(mute_audio)
+	
+	def set_proxy(self, proxy: Optional[Union[str, list[str]]]):
+		"""
+		Sets the proxy.
+
+		Args:
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses.
+		"""
+		self.webdriver_start_args.set_proxy_server(proxy)
+		self.webdriver_options_manager.set_proxy(proxy)
+	
+	def set_profile_dir(self, profile_dir: Optional[str]):
+		"""
+		Sets the profile directory.
+
+		Args:
+			profile_dir (Optional[str]): Path to the browser profile directory.
+		"""
+		self.webdriver_start_args.set_profile_dir(profile_dir)
+	
+	def set_debugging_port(self, debugging_port: Optional[int]):
+		"""
+		Sets the debugging port.
+
+		Args:
+			debugging_port (Optional[int]): Debugging port number.
+		"""
+		self.webdriver_start_args.set_debugging_port(debugging_port)
+		self.webdriver_options_manager.set_debugger_address(debugging_port)
+	
+	def reset_settings(
+			self,
+			debugging_port: Optional[int] = None,
+			profile_dir: Optional[str] = None,
+			headless_mode: Optional[bool] = None,
+			mute_audio: Optional[bool] = None,
+			proxy: Optional[Union[str, list[str]]] = None,
+			user_agent: Optional[str] = None,
+			window_rect: Optional[WindowRect] = None,
+	):
+		"""
+		Resets browser settings to provided values.
+
+		Args:
+			debugging_port (Optional[int]): Debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
+			user_agent (Optional[str]): User agent string to use. Defaults to None.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+		"""
+		if window_rect is None:
+			window_rect = WindowRect()
+		
+		self.set_debugging_port(debugging_port)
+		self.set_profile_dir(profile_dir)
+		self.set_proxy(proxy)
+		self.set_mute_audio(mute_audio)
+		self.set_headless_mode(headless_mode)
+		self.set_user_agent(user_agent)
+		self.window_rect = window_rect
 	
 	def create_driver(self):
 		"""
-		Creates the webdriver instance (placeholder).
+		Abstract method to create a WebDriver instance. Must be implemented in child classes.
 		"""
-		pass
+		raise NotImplementedError("This function must be implemented in child classes.")
 	
-	def renew_bas_and_bom(self):
+	@property
+	def debugging_port(self) -> Optional[int]:
 		"""
-		Renews BrowserStartArgs and BrowserOptionsManager (placeholder).
+		Gets the currently set debugging port.
+
+		Returns:
+			Optional[int]: The debugging port number, or None if not set.
 		"""
-		pass
+		return self.webdriver_start_args.debugging_port
 	
 	def check_webdriver_active(self):
 		"""
-		Checks if the webdriver is currently active.
+		Checks if the WebDriver is active by verifying if the debugging port is in use.
 
 		Returns:
-			bool: True if the webdriver is active, False otherwise.
+			bool: True if the WebDriver is active, False otherwise.
 		"""
-		if self.debugging_port is not None and self.debugging_port in get_localhost_busy_ports():
+		if self.debugging_port in get_localhost_busy_ports():
 			return True
 		else:
 			return False
 	
-	def start_webdriver(
+	def find_debugging_port(self, debugging_port: Optional[int], profile_dir: Optional[str]) -> int:
+		"""
+		Finds an appropriate debugging port, either reusing a previous session's port or finding a free port.
+
+		Args:
+			debugging_port (Optional[int]): Requested debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Profile directory path. Defaults to None.
+
+		Returns:
+			int: The debugging port number to use.
+		"""
+		previous_session = find_browser_previous_session(
+				self.browser_exe,
+				self.webdriver_start_args.profile_dir_command_line,
+				profile_dir
+		)
+		
+		if previous_session is not None:
+			return previous_session
+		
+		if debugging_port is not None:
+			return get_localhost_minimum_free_port(debugging_port)
+		
+		if self.debugging_port is None:
+			return get_localhost_minimum_free_port()
+		
+		return self.debugging_port
+	
+	def update_settings(
 			self,
 			debugging_port: Optional[int] = None,
-			webdriver_dir: Optional[str] = None,
+			profile_dir: Optional[str] = None,
 			headless_mode: Optional[bool] = None,
 			mute_audio: Optional[bool] = None,
 			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[list[str]] = None,
+			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 	):
 		"""
-		Starts the webdriver.
+		Updates browser settings with provided values, keeping existing settings if new values are None.
 
 		Args:
-			debugging_port (Optional[int]): The debugging port. Defaults to None.
-			webdriver_dir (Optional[str]): The webdriver directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to run in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): The proxy server(s). Defaults to None.
-			user_agent (Optional[list[str]]): The user agent. Defaults to None.
-			window_rect (Optional[WindowRect]): The browser window size and position. Defaults to None.
+			debugging_port (Optional[int]): Debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
+			user_agent (Optional[str]): User agent string to use. Defaults to None.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+		"""
+		if profile_dir is not None:
+			self.set_profile_dir(profile_dir)
+		
+		if proxy is not None:
+			self.set_proxy(proxy)
+		
+		if mute_audio is not None:
+			self.set_mute_audio(mute_audio)
+		
+		if headless_mode is not None:
+			self.set_headless_mode(headless_mode)
+		
+		if user_agent is not None:
+			self.set_user_agent(user_agent)
+		
+		if window_rect is not None:
+			self.window_rect = window_rect
+		
+		self.set_debugging_port(self.find_debugging_port(debugging_port, profile_dir))
+	
+	def start_webdriver(
+			self,
+			debugging_port: Optional[int] = None,
+			profile_dir: Optional[str] = None,
+			headless_mode: Optional[bool] = None,
+			mute_audio: Optional[bool] = None,
+			proxy: Optional[Union[str, list[str]]] = None,
+			user_agent: Optional[str] = None,
+			window_rect: Optional[WindowRect] = None,
+	):
+		"""
+		Starts the WebDriver instance, launching the browser subprocess if necessary.
+
+		Args:
+			debugging_port (Optional[int]): Debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
+			user_agent (Optional[str]): User agent string to use. Defaults to None.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
 		"""
 		if self.driver is None:
-			if webdriver_dir is not None:
-				self.webdriver_dir = webdriver_dir
-		
-			if debugging_port is not None:
-				self.debugging_port = get_localhost_minimum_free_port(debugging_port)
-			elif self.debugging_port is None:
-				self.debugging_port = get_localhost_minimum_free_port()
-		
-			if headless_mode is not None:
-				self.headless_mode = headless_mode
-		
-			if headless_mode is not None:
-				self.mute_audio = mute_audio
-		
-			if user_agent is not None:
-				self.user_agent = user_agent
-		
-			if proxy is not None:
-				self.proxy = proxy
-		
-			if window_rect is not None:
-				self.window_rect = window_rect
+			self.update_settings(
+					debugging_port=debugging_port,
+					profile_dir=profile_dir,
+					headless_mode=headless_mode,
+					mute_audio=mute_audio,
+					proxy=proxy,
+					user_agent=user_agent,
+					window_rect=window_rect
+			)
 		
 			self.webdriver_is_active = self.check_webdriver_active()
 		
 			if not self.webdriver_is_active:
-				self.renew_bas_and_bom()
-		
+				print(self.webdriver_start_args.start_command)
 				Popen(self.webdriver_start_args.start_command, shell=True)
 		
 				while not self.webdriver_is_active:
 					self.webdriver_is_active = self.check_webdriver_active()
 		
-				self.create_driver()
-			else:
-				self.webdriver_start_args.set_debugging_port(self.debugging_port)
-				self.webdriver_options_manager.set_debugger_address(self.debugging_port)
-		
-				self.create_driver()
+			self.create_driver()
 	
 	def close_webdriver(self):
 		"""
-		Closes the webdriver and associated browser process.
+		Closes the WebDriver instance and terminates the associated browser subprocess.
 		"""
 		for pid, ports in get_localhost_processes_with_pids().items():
 			if self.debugging_port in ports:
@@ -897,58 +1134,37 @@ class BrowserWebDriver(EmptyWebDriver):
 				sleep(1)
 				break
 		
-		self.webdriver_service = None
-		self.webdriver_options = None
 		self.driver = None
 	
 	def restart_webdriver(
 			self,
 			debugging_port: Optional[int] = None,
-			webdriver_dir: Optional[str] = None,
+			profile_dir: Optional[str] = None,
 			headless_mode: Optional[bool] = None,
 			mute_audio: Optional[bool] = None,
 			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[list[str]] = None,
+			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 	):
 		"""
-		Restarts the webdriver with given options.
+		Restarts the WebDriver instance, closing and then restarting the browser with current or provided settings.
 
 		Args:
-			debugging_port (Optional[int]): The debugging port. Defaults to None.
-			webdriver_dir (Optional[str]): The webdriver directory. Defaults to None.
-			headless_mode (Optional[bool]): Run in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): The proxy server. Defaults to None.
-			user_agent (Optional[list[str]]): The user agent. Defaults to None.
-			window_rect (Optional[WindowRect]): The desired window size and position. Defaults to None.
+			debugging_port (Optional[int]): Debugging port number. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
+			user_agent (Optional[str]): User agent string to use. Defaults to None.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
 		"""
 		self.close_webdriver()
 		self.start_webdriver(
 				debugging_port,
-				webdriver_dir,
+				profile_dir,
 				headless_mode,
 				mute_audio,
 				proxy,
 				user_agent,
 				window_rect
 		)
-	
-	def change_proxy(self, proxy: str | list[str]):
-		"""
-		Changes the proxy settings and restarts the webdriver.
-
-		Args:
-			proxy (str | list[str]): The new proxy server or list of servers.
-		"""
-		self.webdriver_options_manager.set_proxy(proxy)
-		self.restart_webdriver()
-	
-	def get_vars_for_remote(self):
-		"""
-		Gets variables needed to create a remote webdriver connection.
-
-		Returns:
-			tuple[str, str]: A tuple containing the command executor URL and the session ID.
-		"""
-		return self.driver.command_executor._url, self.driver.session_id
