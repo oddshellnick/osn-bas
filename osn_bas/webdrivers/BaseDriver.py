@@ -456,8 +456,6 @@ class BrowserWebDriver:
 			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
 		"""
-		super().__init__(implicitly_wait, page_load_timeout)
-		
 		if window_rect is None:
 			window_rect = WindowRect()
 		
