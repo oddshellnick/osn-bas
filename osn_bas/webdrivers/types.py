@@ -11,7 +11,7 @@ class WebdriverOption(TypedDict):
     Attributes:
         name (str): The name of the webdriver option. This is a human-readable identifier for the option.
         command (str): The command-line command or argument used to set this option in the webdriver.
-        type (Literal["normal", "experimental", None]):  The type of the webdriver option, indicating its stability or purpose.
+        type (Literal["normal", "experimental", None]): The type of the webdriver option, indicating its stability or purpose.
     """
     name: str
     command: str
