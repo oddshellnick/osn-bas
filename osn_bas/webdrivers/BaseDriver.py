@@ -402,409 +402,24 @@ class BrowserStartArgs:
 		self.update_command()
 
 
-class EmptyWebDriver:
+class BrowserWebDriver:
 	"""
-	Provides a simplified interface for interacting with a web driver.
+	A base class for managing browser and WebDriver instances.
 
-	This class serves as a base for creating WebDriver wrappers, offering a set of commonly used WebDriver actions.
-	It is designed to be extended, providing basic functionalities without browser-specific implementations.
-
-	Attributes:
-		base_implicitly_wait (int): The base implicit wait time in seconds for element searching.
-		base_page_load_timeout (int): The base page load timeout in seconds for page loading.
-		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]): The underlying WebDriver instance, initialized to None and set upon driver creation in subclasses.
-	"""
-	
-	def __init__(self, implicitly_wait: int = 5, page_load_timeout: int = 5):
-		"""
-		Initializes an instance of the EmptyWebDriver class.
-
-		Args:
-			implicitly_wait (int): The base implicit wait time in seconds. Defaults to 5.
-			page_load_timeout (int): The base page load timeout in seconds. Defaults to 5.
-		"""
-		self.base_implicitly_wait = implicitly_wait
-		self.base_page_load_timeout = page_load_timeout
-		self.js_scripts = read_js_scripts()
-		self.driver: Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]] = None
-	
-	def switch_to_window(self, window: Optional[Union[str, int]] = None):
-		"""
-		Switches focus to the specified window.
-
-		Args:
-			window (Optional[Union[str, int]]): The name, index, or handle of the window to switch to. If None, switches to the current window. Defaults to None.
-		"""
-		if isinstance(window, str):
-			self.driver.switch_to.window(window)
-		elif isinstance(window, int):
-			self.driver.switch_to.window(self.driver.window_handles[window])
-		else:
-			self.driver.switch_to.window(self.driver.current_window_handle)
-	
-	def close_window(self, window: Optional[Union[str, int]] = None):
-		"""
-		Closes the specified window.
-
-		Args:
-			window (Optional[Union[str, int]]): The name, index, or handle of the window to close. If None, closes the current window. Defaults to None.
-		"""
-		if window is not None:
-			switch_to_new_window = window == self.driver.current_window_handle
-		
-			self.switch_to_window(window)
-			self.driver.close()
-		
-			if switch_to_new_window and len(self.driver.window_handles) > 0:
-				self.switch_to_window(-1)
-	
-	def close_all_windows(self):
-		"""
-		Closes all open windows.
-		"""
-		for window in self.driver.window_handles:
-			self.close_window(window)
-	
-	@property
-	def current_url(self) -> str:
-		"""
-		Gets the current URL.
-
-		Returns:
-			str: The current URL.
-		"""
-		return self.driver.current_url
-	
-	def update_times(
-			self,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None
-	):
-		"""
-		Updates the implicit wait and page load timeout.
-
-		Args:
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds. Defaults to None.
-		"""
-		if temp_implicitly_wait:
-			implicitly_wait = temp_implicitly_wait + random()
-		else:
-			implicitly_wait = self.base_implicitly_wait + random()
-		
-		if temp_page_load_timeout:
-			page_load_timeout = temp_page_load_timeout + random()
-		else:
-			page_load_timeout = self.base_page_load_timeout + random()
-		
-		self.driver.implicitly_wait(implicitly_wait)
-		self.driver.set_page_load_timeout(page_load_timeout)
-	
-	def find_inner_web_element(
-			self,
-			parent_element: WebElement,
-			by: By,
-			value: str,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None,
-	) -> WebElement:
-		"""
-		Finds a single web element within another element.
-
-		Args:
-			parent_element (WebElement): The parent web element to search within.
-			by (By): Locator strategy (e.g., By.ID, By.XPATH).
-			value (str): Locator value (e.g., "elementId", "//xpath/to/element").
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
-
-		Returns:
-			WebElement: The found web element.
-		"""
-		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
-		return parent_element.find_element(by, value)
-	
-	def find_inner_web_elements(
-			self,
-			parent_element: WebElement,
-			by: By,
-			value: str,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None,
-	) -> list[WebElement]:
-		"""
-		Finds multiple web elements within another element.
-
-		Args:
-			parent_element (WebElement): The parent web element to search within.
-			by (By): Locator strategy (e.g., By.CLASS_NAME, By.CSS_SELECTOR).
-			value (str): Locator value (e.g., "className", "css.selector").
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
-
-		Returns:
-			list[WebElement]: A list of found web elements.
-		"""
-		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
-		return parent_element.find_elements(by, value)
-	
-	def find_web_elements(
-			self,
-			by: By,
-			value: str,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None
-	) -> list[WebElement]:
-		"""
-		Finds multiple web elements on the page.
-
-		Args:
-			by (By): Locator strategy (e.g., By.TAG_NAME, By.LINK_TEXT).
-			value (str): Locator value (e.g., "div", "Click Here").
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
-
-		Returns:
-			list[WebElement]: A list of found web elements.
-		"""
-		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
-		return self.driver.find_elements(by, value)
-	
-	def execute_js_script(self, script: str, *args) -> Any:
-		"""
-		Executes a JavaScript script in the current browser context.
-
-		This method uses the Selenium WebDriver's `execute_script` function to run arbitrary JavaScript code
-		within the context of the currently active web page. It allows for dynamic interaction with the webpage
-		beyond the standard WebDriver commands.
-
-		Args:
-			script (str): The JavaScript code to be executed as a string. This script can access and manipulate
-						  the DOM of the webpage, call browser APIs, and perform any action that is possible in JavaScript.
-			*args: Variable length argument list. These arguments are passed to the JavaScript script and can be accessed
-				   within the script using the `arguments` array (e.g., `arguments[0]`, `arguments[1]`, etc.).
-				   These arguments can be of any type that can be serialized to JSON.
-
-		Returns:
-			Any: The result of the JavaScript execution. The return value from JavaScript is automatically
-						converted to the corresponding Python type. If the JavaScript code returns a primitive type
-						(number, string, boolean), it will be returned as is. If it returns a JavaScript object or array,
-						it will be converted to a Python dictionary or list, respectively. If the script does not return
-						any value or returns `undefined`, Python `None` is returned.
-		"""
-		return self.driver.execute_script(script, *args)
-	
-	def get_element_css_style(self, element: WebElement) -> dict[str, str]:
-		"""
-		Retrieves the computed CSS style of a WebElement.
-
-		This method uses JavaScript to get the computed style of a given WebElement.
-		It extracts all CSS properties and their values as a dictionary.
-
-		Args:
-			element (WebElement): The WebElement for which to retrieve the CSS style.
-
-		Returns:
-			dict[str, str]: A dictionary where keys are CSS property names and values are their computed values.
-		"""
-		return self.execute_js_script(self.js_scripts["get_element_css"], element)
-	
-	def hover_element(self, element: WebElement):
-		"""
-		Hovers the mouse over an element.
-
-		Args:
-			element (WebElement): The element to hover over.
-		"""
-		ActionChains(self.driver).move_to_element(element).perform()
-	
-	@property
-	def html(self) -> str:
-		"""
-		Gets the current page source.
-
-		Returns:
-			str: The page source.
-		"""
-		return self.driver.page_source
-	
-	def open_new_tab(self, link: str = ""):
-		"""
-		Opens a new tab with the given URL.
-
-		Args:
-			link (str): URL to open in the new tab. Defaults to "".
-		"""
-		self.execute_js_script(self.js_scripts["open_new_tab"], link)
-	
-	@property
-	def rect(self) -> WindowRect:
-		"""
-		Gets the window rectangle.
-
-		Returns:
-			WindowRect: The window rectangle object containing x, y, width, and height.
-		"""
-		window_rect = self.driver.get_window_rect()
-		
-		return WindowRect(
-				window_rect["x"],
-				window_rect["y"],
-				window_rect["width"],
-				window_rect["height"]
-		)
-	
-	def refresh_webdriver(self):
-		"""
-		Refreshes the current page.
-		"""
-		self.driver.refresh()
-	
-	def scroll_by_amount(self, x: int = 0, y: int = 0):
-		"""
-		Scrolls the viewport by a specified amount.
-
-		Args:
-			x (int): Horizontal scroll amount in pixels. Defaults to 0.
-			y (int): Vertical scroll amount in pixels. Defaults to 0.
-		"""
-		ActionChains(self.driver).scroll_by_amount(x, y).perform()
-	
-	def find_web_element(
-			self,
-			by: By,
-			value: str,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None
-	) -> WebElement:
-		"""
-		Finds a single web element on the page.
-
-		Args:
-			by (By): Locator strategy (e.g., By.ID, By.NAME).
-			value (str): Locator value (e.g., "loginForm", "username").
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
-
-		Returns:
-			WebElement: The found web element.
-		"""
-		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
-		return self.driver.find_element(by, value)
-	
-	def scroll_down_of_element(self, by: By, value: str):
-		"""
-		Scrolls down within a specific element using PAGE_DOWN key.
-
-		Args:
-			by (By): Locator Strategy (e.g., By.ID, By.CLASS_NAME).
-			value (str): Locator Value (e.g., "scrollableDiv", "content-area").
-		"""
-		self.find_web_element(by, value).send_keys(Keys.PAGE_DOWN)
-	
-	def scroll_from_origin(self, origin: ScrollOrigin, x: int = 0, y: int = 0):
-		"""
-		Scrolls from a specific origin by a specified amount.
-
-		Args:
-			origin (ScrollOrigin): The scroll origin (e.g., ScrollOrigin.viewport, ScrollOrigin.element).
-			x (int): Horizontal scroll amount in pixels. Defaults to 0.
-			y (int): Vertical scroll amount in pixels. Defaults to 0.
-
-		Raises:
-			MoveTargetOutOfBoundsException: If the origin with offset is outside the viewport.
-		"""
-		ActionChains(self.driver).scroll_from_origin(origin, x, y).perform()
-	
-	def scroll_to_element(self, element: WebElement):
-		"""
-		Scrolls an element into view.
-
-		Args:
-			element (WebElement): The element to scroll into view.
-		"""
-		ActionChains(self.driver).scroll_to_element(element).perform()
-	
-	def scroll_up_of_element(self, by: By, value: str):
-		"""
-		Scrolls up within a specific element using PAGE_UP key.
-
-		Args:
-			by (By): Locator strategy (e.g., By.CSS_SELECTOR, By.XPATH).
-			value (str): Locator value (e.g., ".scroll-container", "//div[@class='scroll-area']").
-		"""
-		self.find_web_element(by, value).send_keys(Keys.PAGE_UP)
-	
-	def search_url(
-			self,
-			url: str,
-			temp_implicitly_wait: Optional[int] = None,
-			temp_page_load_timeout: Optional[int] = None
-	):
-		"""
-		Opens a URL in the current browser session.
-
-		Args:
-			url (str): The URL to open.
-			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for page load. Defaults to None.
-			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for page load. Defaults to None.
-		"""
-		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
-		self.driver.get(url)
-	
-	def stop_window_loading(self):
-		"""
-		Stops the current page loading.
-		"""
-		self.execute_js_script(self.js_scripts["stop_window_loading"])
-	
-	def switch_to_frame(self, frame: Union[str, int, WebElement]):
-		"""
-		Switches the driver's focus to a frame.
-
-		Args:
-			frame (Union[str, int, WebElement]): The frame to switch to. Can be a frame name, index, or WebElement.
-		"""
-		self.driver.switch_to.frame(frame)
-	
-	@property
-	def window(self) -> str:
-		"""
-		Gets the current window handle.
-
-		Returns:
-			str: The current window handle.
-		"""
-		return self.driver.current_window_handle
-	
-	@property
-	def windows_names(self) -> list[str]:
-		"""
-		Gets the handles of all open windows.
-
-		Returns:
-		   list[str]: A list of window handles.
-		"""
-		return self.driver.window_handles
-
-
-class BrowserWebDriver(EmptyWebDriver):
-	"""
-	Extends EmptyWebDriver to manage a browser instance lifecycle.
-
-	This class inherits from `EmptyWebDriver` and adds functionality to manage the lifecycle of a browser instance,
-	including starting, stopping, and restarting the browser with various configurations.
+	This class provides a foundation for interacting with web browsers through WebDriver.
+	It handles the setup of browser executables, WebDriver paths, browser options, and start arguments.
+	It also manages the WebDriver lifecycle, including starting and stopping the browser.
 
 	Attributes:
 		browser_exe (Union[str, pathlib.Path]): Path to the browser executable or just the executable name.
 		webdriver_path (str): Path to the WebDriver executable.
-		window_rect (WindowRect): Object to store window rectangle settings.
-		webdriver_start_args (BrowserStartArgs): Manages browser start arguments.
-		webdriver_options_manager (BrowserOptionsManager): Manages browser options.
-		webdriver_is_active (bool): Flag indicating if the WebDriver is currently active.
-		base_implicitly_wait (int): Inherited from EmptyWebDriver, base implicit wait time.
-		base_page_load_timeout (int): Inherited from EmptyWebDriver, base page load timeout.
-		driver (webdriver): Inherited from EmptyWebDriver, the WebDriver instance.
+		window_rect (WindowRect): Object to store window rectangle settings, controlling window position and size.
+		webdriver_start_args (BrowserStartArgs): Manages browser-specific start arguments passed to the WebDriver.
+		webdriver_options_manager (BrowserOptionsManager): Manages browser options, such as headless mode, extensions, etc.
+		webdriver_is_active (bool): Flag indicating whether the WebDriver instance is currently active and controlling a browser.
+		base_implicitly_wait (int): Base implicit wait time in seconds for WebDriver operations, inherited from EmptyWebDriver.
+		base_page_load_timeout (int): Base page load timeout in seconds for page loading operations, inherited from EmptyWebDriver.
+		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]): The underlying WebDriver instance (e.g., Chrome, Edge, Firefox WebDriver).
 	"""
 	
 	def __init__(
@@ -849,9 +464,12 @@ class BrowserWebDriver(EmptyWebDriver):
 		self.browser_exe = browser_exe
 		self.webdriver_path = webdriver_path
 		self.window_rect = window_rect
-		
+		self.base_implicitly_wait = implicitly_wait
+		self.base_page_load_timeout = page_load_timeout
+		self.js_scripts = read_js_scripts()
+		self.driver: Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]] = None
+
 		self.webdriver_start_args: BrowserStartArgs = webdriver_start_args(browser_exe=browser_exe)
-		
 		self.webdriver_options_manager: BrowserOptionsManager = webdriver_options_manager()
 		self.webdriver_is_active = False
 		
@@ -863,6 +481,364 @@ class BrowserWebDriver(EmptyWebDriver):
 				proxy=proxy,
 				user_agent=user_agent
 		)
+
+	def switch_to_window(self, window: Optional[Union[str, int]] = None):
+		"""
+		Switches focus to the specified window.
+
+		Args:
+			window (Optional[Union[str, int]]): The name, index, or handle of the window to switch to. If None, switches to the current window. Defaults to None.
+		"""
+		if isinstance(window, str):
+			self.driver.switch_to.window(window)
+		elif isinstance(window, int):
+			self.driver.switch_to.window(self.driver.window_handles[window])
+		else:
+			self.driver.switch_to.window(self.driver.current_window_handle)
+
+	def close_window(self, window: Optional[Union[str, int]] = None):
+		"""
+		Closes the specified window.
+
+		Args:
+			window (Optional[Union[str, int]]): The name, index, or handle of the window to close. If None, closes the current window. Defaults to None.
+		"""
+		if window is not None:
+			switch_to_new_window = window == self.driver.current_window_handle
+
+			self.switch_to_window(window)
+			self.driver.close()
+
+			if switch_to_new_window and len(self.driver.window_handles) > 0:
+				self.switch_to_window(-1)
+
+	def close_all_windows(self):
+		"""
+		Closes all open windows.
+		"""
+		for window in self.driver.window_handles:
+			self.close_window(window)
+
+	@property
+	def current_url(self) -> str:
+		"""
+		Gets the current URL.
+
+		Returns:
+			str: The current URL.
+		"""
+		return self.driver.current_url
+
+	def update_times(
+			self,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None
+	):
+		"""
+		Updates the implicit wait and page load timeout.
+
+		Args:
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds. Defaults to None.
+		"""
+		if temp_implicitly_wait:
+			implicitly_wait = temp_implicitly_wait + random()
+		else:
+			implicitly_wait = self.base_implicitly_wait + random()
+
+		if temp_page_load_timeout:
+			page_load_timeout = temp_page_load_timeout + random()
+		else:
+			page_load_timeout = self.base_page_load_timeout + random()
+
+		self.set_driver_timeouts(page_load_timeout=page_load_timeout, implicit_wait_timeout=implicitly_wait)
+
+	def find_inner_web_element(
+			self,
+			parent_element: WebElement,
+			by: By,
+			value: str,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None,
+	) -> WebElement:
+		"""
+		Finds a single web element within another element.
+
+		Args:
+			parent_element (WebElement): The parent web element to search within.
+			by (By): Locator strategy (e.g., By.ID, By.XPATH).
+			value (str): Locator value (e.g., "elementId", "//xpath/to/element").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
+
+		Returns:
+			WebElement: The found web element.
+		"""
+		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
+		return parent_element.find_element(by, value)
+
+	def find_inner_web_elements(
+			self,
+			parent_element: WebElement,
+			by: By,
+			value: str,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None,
+	) -> list[WebElement]:
+		"""
+		Finds multiple web elements within another element.
+
+		Args:
+			parent_element (WebElement): The parent web element to search within.
+			by (By): Locator strategy (e.g., By.CLASS_NAME, By.CSS_SELECTOR).
+			value (str): Locator value (e.g., "className", "css.selector").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
+
+		Returns:
+			list[WebElement]: A list of found web elements.
+		"""
+		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
+		return parent_element.find_elements(by, value)
+
+	def find_web_elements(
+			self,
+			by: By,
+			value: str,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None
+	) -> list[WebElement]:
+		"""
+		Finds multiple web elements on the page.
+
+		Args:
+			by (By): Locator strategy (e.g., By.TAG_NAME, By.LINK_TEXT).
+			value (str): Locator value (e.g., "div", "Click Here").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
+
+		Returns:
+			list[WebElement]: A list of found web elements.
+		"""
+		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
+		return self.driver.find_elements(by, value)
+
+	def execute_js_script(self, script: str, *args) -> Any:
+		"""
+		Executes a JavaScript script in the current browser context.
+
+		This method uses the Selenium WebDriver's `execute_script` function to run arbitrary JavaScript code
+		within the context of the currently active web page. It allows for dynamic interaction with the webpage
+		beyond the standard WebDriver commands.
+
+		Args:
+			script (str): The JavaScript code to be executed as a string. This script can access and manipulate
+						  the DOM of the webpage, call browser APIs, and perform any action that is possible in JavaScript.
+			*args: Variable length argument list. These arguments are passed to the JavaScript script and can be accessed
+				   within the script using the `arguments` array (e.g., `arguments[0]`, `arguments[1]`, etc.).
+				   These arguments can be of any type that can be serialized to JSON.
+
+		Returns:
+			Any: The result of the JavaScript execution. The return value from JavaScript is automatically
+						converted to the corresponding Python type. If the JavaScript code returns a primitive type
+						(number, string, boolean), it will be returned as is. If it returns a JavaScript object or array,
+						it will be converted to a Python dictionary or list, respectively. If the script does not return
+						any value or returns `undefined`, Python `None` is returned.
+		"""
+		return self.driver.execute_script(script, *args)
+
+	def get_element_css_style(self, element: WebElement) -> dict[str, str]:
+		"""
+		Retrieves the computed CSS style of a WebElement.
+
+		This method uses JavaScript to get the computed style of a given WebElement.
+		It extracts all CSS properties and their values as a dictionary.
+
+		Args:
+			element (WebElement): The WebElement for which to retrieve the CSS style.
+
+		Returns:
+			dict[str, str]: A dictionary where keys are CSS property names and values are their computed values.
+		"""
+		return self.execute_js_script(self.js_scripts["get_element_css"], element)
+
+	def hover_element(self, element: WebElement):
+		"""
+		Hovers the mouse over an element.
+
+		Args:
+			element (WebElement): The element to hover over.
+		"""
+		ActionChains(self.driver).move_to_element(element).perform()
+
+	@property
+	def html(self) -> str:
+		"""
+		Gets the current page source.
+
+		Returns:
+			str: The page source.
+		"""
+		return self.driver.page_source
+
+	def open_new_tab(self, link: str = ""):
+		"""
+		Opens a new tab with the given URL.
+
+		Args:
+			link (str): URL to open in the new tab. Defaults to "".
+		"""
+		self.execute_js_script(self.js_scripts["open_new_tab"], link)
+
+	@property
+	def rect(self) -> WindowRect:
+		"""
+		Gets the window rectangle.
+
+		Returns:
+			WindowRect: The window rectangle object containing x, y, width, and height.
+		"""
+		window_rect = self.driver.get_window_rect()
+
+		return WindowRect(
+				window_rect["x"],
+				window_rect["y"],
+				window_rect["width"],
+				window_rect["height"]
+		)
+
+	def refresh_webdriver(self):
+		"""
+		Refreshes the current page.
+		"""
+		self.driver.refresh()
+
+	def scroll_by_amount(self, x: int = 0, y: int = 0):
+		"""
+		Scrolls the viewport by a specified amount.
+
+		Args:
+			x (int): Horizontal scroll amount in pixels. Defaults to 0.
+			y (int): Vertical scroll amount in pixels. Defaults to 0.
+		"""
+		ActionChains(self.driver).scroll_by_amount(x, y).perform()
+
+	def find_web_element(
+			self,
+			by: By,
+			value: str,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None
+	) -> WebElement:
+		"""
+		Finds a single web element on the page.
+
+		Args:
+			by (By): Locator strategy (e.g., By.ID, By.NAME).
+			value (str): Locator value (e.g., "loginForm", "username").
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for this operation. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for this operation. Defaults to None.
+
+		Returns:
+			WebElement: The found web element.
+		"""
+		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
+		return self.driver.find_element(by, value)
+
+	def scroll_down_of_element(self, by: By, value: str):
+		"""
+		Scrolls down within a specific element using PAGE_DOWN key.
+
+		Args:
+			by (By): Locator Strategy (e.g., By.ID, By.CLASS_NAME).
+			value (str): Locator Value (e.g., "scrollableDiv", "content-area").
+		"""
+		self.find_web_element(by, value).send_keys(Keys.PAGE_DOWN)
+
+	def scroll_from_origin(self, origin: ScrollOrigin, x: int = 0, y: int = 0):
+		"""
+		Scrolls from a specific origin by a specified amount.
+
+		Args:
+			origin (ScrollOrigin): The scroll origin (e.g., ScrollOrigin.viewport, ScrollOrigin.element).
+			x (int): Horizontal scroll amount in pixels. Defaults to 0.
+			y (int): Vertical scroll amount in pixels. Defaults to 0.
+
+		Raises:
+			MoveTargetOutOfBoundsException: If the origin with offset is outside the viewport.
+		"""
+		ActionChains(self.driver).scroll_from_origin(origin, x, y).perform()
+
+	def scroll_to_element(self, element: WebElement):
+		"""
+		Scrolls an element into view.
+
+		Args:
+			element (WebElement): The element to scroll into view.
+		"""
+		ActionChains(self.driver).scroll_to_element(element).perform()
+
+	def scroll_up_of_element(self, by: By, value: str):
+		"""
+		Scrolls up within a specific element using PAGE_UP key.
+
+		Args:
+			by (By): Locator strategy (e.g., By.CSS_SELECTOR, By.XPATH).
+			value (str): Locator value (e.g., ".scroll-container", "//div[@class='scroll-area']").
+		"""
+		self.find_web_element(by, value).send_keys(Keys.PAGE_UP)
+
+	def search_url(
+			self,
+			url: str,
+			temp_implicitly_wait: Optional[int] = None,
+			temp_page_load_timeout: Optional[int] = None
+	):
+		"""
+		Opens a URL in the current browser session.
+
+		Args:
+			url (str): The URL to open.
+			temp_implicitly_wait (Optional[int]): Temporary implicit wait time in seconds for page load. Defaults to None.
+			temp_page_load_timeout (Optional[int]): Temporary page load timeout in seconds for page load. Defaults to None.
+		"""
+		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
+		self.driver.get(url)
+
+	def stop_window_loading(self):
+		"""
+		Stops the current page loading.
+		"""
+		self.execute_js_script(self.js_scripts["stop_window_loading"])
+
+	def switch_to_frame(self, frame: Union[str, int, WebElement]):
+		"""
+		Switches the driver's focus to a frame.
+
+		Args:
+			frame (Union[str, int, WebElement]): The frame to switch to. Can be a frame name, index, or WebElement.
+		"""
+		self.driver.switch_to.frame(frame)
+
+	@property
+	def window(self) -> str:
+		"""
+		Gets the current window handle.
+
+		Returns:
+			str: The current window handle.
+		"""
+		return self.driver.current_window_handle
+
+	@property
+	def windows_names(self) -> list[str]:
+		"""
+		Gets the handles of all open windows.
+
+		Returns:
+		   list[str]: A list of window handles.
+		"""
+		return self.driver.window_handles
 	
 	def get_vars_for_remote(self):
 		"""
@@ -1136,6 +1112,56 @@ class BrowserWebDriver(EmptyWebDriver):
 				break
 		
 		self.driver = None
+
+	def set_window_rect(self, rect: WindowRect):
+		"""
+		Sets the browser window rectangle.
+
+		This method sets the position and size of the browser window using the provided `WindowRect` object.
+		It uses the WebDriver's `set_window_rect` method to apply the window settings.
+
+		Args:
+			rect (WindowRect): An object containing the desired window rectangle parameters (x, y, width, height).
+		"""
+		self.driver.set_window_rect(x=rect.x, y=rect.y, width=rect.width, height=rect.height)
+
+	def set_page_load_timeout(self, timeout: float):
+		"""
+		Sets the page load timeout for WebDriver operations.
+
+		This method configures the maximum time WebDriver will wait for a page to load before timing out.
+		It utilizes the WebDriver's `set_page_load_timeout` method to set this timeout.
+
+		Args:
+			timeout (float): The page load timeout value in seconds.
+		"""
+		self.driver.set_page_load_timeout(timeout)
+
+	def set_implicitly_wait_timeout(self, timeout: float):
+		"""
+		Sets the implicit wait timeout for WebDriver element searches.
+
+		This method sets the amount of time WebDriver will implicitly wait when searching for elements
+		before throwing a `NoSuchElementException`. It uses the WebDriver's `implicitly_wait` method.
+
+		Args:
+			timeout (float): The implicit wait timeout value in seconds.
+		"""
+		self.driver.implicitly_wait(timeout)
+
+	def set_driver_timeouts(self, page_load_timeout: float, implicit_wait_timeout: float):
+		"""
+		Sets both page load timeout and implicit wait timeout for WebDriver.
+
+		This method is a convenience function to set both the page load timeout and the implicit wait timeout
+		in a single call. It internally calls `set_page_load_timeout` and `set_implicitly_wait_timeout`.
+
+		Args:
+			page_load_timeout (float): The page load timeout value in seconds.
+			implicit_wait_timeout (float): The implicit wait timeout value in seconds.
+		"""
+		self.set_page_load_timeout(page_load_timeout)
+		self.set_implicitly_wait_timeout(implicit_wait_timeout)
 	
 	def restart_webdriver(
 			self,
