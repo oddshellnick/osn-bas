@@ -1,6 +1,7 @@
 import pathlib
 from time import sleep
 from subprocess import Popen
+from selenium import webdriver
 from random import choice, random
 from typing import Any, Optional, Union
 from osn_bas.utilities import WindowRect
@@ -35,7 +36,7 @@ class BrowserOptionsManager:
 	It provides methods to add, remove, and modify browser arguments and experimental options.
 
 	Attributes:
-	   options (Any): The WebDriver options object, specific to the browser type (e.g., ChromeOptions, FirefoxOptions). Initialized by `renew_webdriver_options`.
+	   options (Union[webdriver.ChromeOptions, webdriver.EdgeOptions, webdriver.FirefoxOptions]): The WebDriver options object, specific to the browser type (e.g., ChromeOptions, FirefoxOptions). Initialized by `renew_webdriver_options`.
 	   debugging_port_command (str): Command line argument format string for setting the debugging port.
 	   user_agent_command (str): Command line argument format string for setting the user agent.
 	   proxy_command (str): Command line argument format string for setting the proxy.
@@ -55,7 +56,7 @@ class BrowserOptionsManager:
 			user_agent_command (str): Command line argument format for user agent.
 			proxy_command (str): Command line argument format for proxy.
 		"""
-		self.options = self.renew_webdriver_options()
+		self.options: Union[webdriver.ChromeOptions, webdriver.EdgeOptions, webdriver.FirefoxOptions] = self.renew_webdriver_options()
 		self.debugging_port_command = debugging_port_command
 		self.user_agent_command = user_agent_command
 		self.proxy_command = proxy_command
@@ -411,7 +412,7 @@ class EmptyWebDriver:
 	Attributes:
 		base_implicitly_wait (int): The base implicit wait time in seconds for element searching.
 		base_page_load_timeout (int): The base page load timeout in seconds for page loading.
-		driver (webdriver): The underlying WebDriver instance, initialized to None and set upon driver creation in subclasses.
+		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]): The underlying WebDriver instance, initialized to None and set upon driver creation in subclasses.
 	"""
 	
 	def __init__(self, implicitly_wait: int = 5, page_load_timeout: int = 5):
@@ -425,7 +426,7 @@ class EmptyWebDriver:
 		self.base_implicitly_wait = implicitly_wait
 		self.base_page_load_timeout = page_load_timeout
 		self.js_scripts = read_js_scripts()
-		self.driver = None
+		self.driver: Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]] = None
 	
 	def switch_to_window(self, window: Optional[Union[str, int]] = None):
 		"""
@@ -849,9 +850,9 @@ class BrowserWebDriver(EmptyWebDriver):
 		self.webdriver_path = webdriver_path
 		self.window_rect = window_rect
 		
-		self.webdriver_start_args = webdriver_start_args(browser_exe=browser_exe)
+		self.webdriver_start_args: BrowserStartArgs = webdriver_start_args(browser_exe=browser_exe)
 		
-		self.webdriver_options_manager = webdriver_options_manager()
+		self.webdriver_options_manager: BrowserOptionsManager = webdriver_options_manager()
 		self.webdriver_is_active = False
 		
 		self.update_settings(
