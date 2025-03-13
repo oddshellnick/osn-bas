@@ -193,7 +193,10 @@ class YandexWebDriver(BrowserWebDriver):
 		self.driver = webdriver.Chrome(options=webdriver_options, service=webdriver_service)
 		
 		self.set_window_rect(self.window_rect)
-		self.set_driver_timeouts(page_load_timeout=self.base_page_load_timeout, implicit_wait_timeout=self.base_implicitly_wait)
+		self.set_driver_timeouts(
+				page_load_timeout=self.base_page_load_timeout,
+				implicit_wait_timeout=self.base_implicitly_wait
+		)
 	
 	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
 		"""
@@ -212,4 +215,7 @@ class YandexWebDriver(BrowserWebDriver):
 		)
 		self.driver.session_id = session_id
 		
-		self.set_driver_timeouts(page_load_timeout=self.base_page_load_timeout, implicit_wait_timeout=self.base_implicitly_wait)
+		self.set_driver_timeouts(
+				page_load_timeout=self.base_page_load_timeout,
+				implicit_wait_timeout=self.base_implicitly_wait
+		)

@@ -100,9 +100,9 @@ def build_first_start_argument(browser_exe: Union[str, pathlib.Path]) -> str:
 		return browser_exe
 	elif isinstance(browser_exe, pathlib.Path):
 		if sys.platform == "win32":
-			return f"cd /d {str(browser_exe.parent.resolve())} && {browser_exe.name}"
+			return f"cd /d \"{str(browser_exe.parent.resolve())}\" && {browser_exe.name}"
 		elif sys.platform in ["linux", "darwin"]:
-			return f"cd '{str(browser_exe.parent.resolve())}' && './{browser_exe.name}'"
+			return f"cd \"{str(browser_exe.parent.resolve())}\" && ./{browser_exe.name}"
 		else:
 			raise OSError(f"Unsupported platform: {sys.platform}.")
 	else:

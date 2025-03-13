@@ -39,8 +39,6 @@ setup(
 		long_description_content_type="text/markdown",
 		packages=find_packages(exclude=["unit_tests*"]),
 		install_requires=get_install_requires(),
-		package_data={
-			"osn_bas": ["webdrivers/js_scripts/*.js"],
-		},
+		package_data={"osn_bas": ["webdrivers/js_scripts/*.js"]},
 		include_package_data=True,
 )
