@@ -4,3 +4,4 @@ osn-windows-cmd>=1.0.0
 osn-requests>=1.1.0
 pywin32>=306
 pandas>=2.2.3
+trio>=0.27.0

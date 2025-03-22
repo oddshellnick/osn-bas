@@ -3,19 +3,22 @@ from typing import Literal, TypedDict
 
 class WebdriverOption(TypedDict):
 	"""
-	Represents a webdriver option configuration.
+	Type definition for WebDriver option configuration.
 
-	This TypedDict defines the structure for specifying options that can be passed to a webdriver instance.
-	It includes the option's name, the command-line command to set it, and its type.
+	This TypedDict defines the structure for configuring WebDriver options,
+	allowing to specify the name, command, and type of option to be set for a browser instance.
 
 	Attributes:
-		name (str): The name of the webdriver option. This is a human-readable identifier for the option.
-		command (str): The command-line command or argument used to set this option in the webdriver.
-		type (Literal["normal", "experimental", None]): The type of the webdriver option, indicating its stability or purpose.
+	   name (str): The name of the option, used as an identifier within the options manager.
+	   command (str): The actual command or option string that WebDriver understands.
+	   type (Literal["normal", "experimental", "attribute", None]): Specifies the type of WebDriver option.
+			Can be "normal" for standard arguments, "experimental" for experimental options,
+			"attribute" for setting browser attributes directly, or None if the option type is not applicable.
 	"""
+	
 	name: str
 	command: str
-	type: Literal["normal", "experimental", None]
+	type: Literal["normal", "experimental", "attribute", None]
 
 
 class JS_Scripts(TypedDict):
@@ -30,6 +33,7 @@ class JS_Scripts(TypedDict):
 	   stop_window_loading (str): JavaScript code as a string to stop the current window's page loading process.
 	   open_new_tab (str): JavaScript code as a string to open a new browser tab, optionally with a specified URL.
 	"""
+	
 	get_element_css: str
 	stop_window_loading: str
 	open_new_tab: str

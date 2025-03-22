@@ -25,6 +25,7 @@ def get_webdriver_version(driver_path: Union[pathlib.Path, str]) -> Optional[str
 		FileNotFoundError: If the webdriver executable does not exist at the given path.
 		Exception: If there is an error executing the webdriver or parsing the output.
 	"""
+	
 	if isinstance(driver_path, str):
 		driver_path = pathlib.Path(driver_path)
 	
@@ -66,6 +67,7 @@ def get_browser_version(browser_path: Union[pathlib.Path, str]) -> str:
 	Returns:
 		str: The version of the browser as a string, or "unknown" if the file does not exist.
 	"""
+	
 	if isinstance(browser_path, str):
 		browser_path = pathlib.Path(browser_path)
 	
@@ -89,6 +91,7 @@ def get_installed_browsers_win32() -> list[Browser]:
 	Returns:
 		list[Browser]: A list of unique installed browsers.
 	"""
+	
 	installed_browsers = []
 	
 	for root_key, access in [

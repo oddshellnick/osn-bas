@@ -5,8 +5,12 @@ from subprocess import PIPE, Popen
 from typing import Optional, Union
 from pandas import DataFrame, Series
 from osn_bas.webdrivers.types import JS_Scripts
-from osn_bas.errors import PlatformNotSupportedError
-from osn_windows_cmd.netstat import get_netstat_connections_data as windows_netstat_connections_data
+from osn_bas.errors import (
+	PlatformNotSupportedError
+)
+from osn_windows_cmd.netstat import (
+	get_netstat_connections_data as windows_netstat_connections_data
+)
 
 
 def read_js_scripts() -> JS_Scripts:
@@ -20,6 +24,7 @@ def read_js_scripts() -> JS_Scripts:
 	Returns:
 		JS_Scripts: An object of type JS_Scripts, containing the content of each JavaScript file as attributes.
 	"""
+	
 	scripts = {}
 	
 	for script_file in (pathlib.Path(__file__).parent / "js_scripts").iterdir():
@@ -53,6 +58,7 @@ def get_found_profile_dir(data: Series, profile_dir_command: str) -> Optional[st
 	Raises:
 		PlatformNotSupportedError: If the platform is not supported.
 	"""
+	
 	if sys.platform == "win32":
 		stdout = Popen(
 				f"wmic process where processid={int(data['PID'])} get CommandLine /FORMAT:LIST",
@@ -90,6 +96,7 @@ def get_active_executables_table(browser_exe: Union[str, pathlib.Path]) -> DataF
 	Raises:
 		PlatformNotSupportedError: If the platform is not supported.
 	"""
+	
 	if sys.platform == "win32":
 		connections_data = windows_netstat_connections_data(
 				show_all_ports=True,
@@ -127,6 +134,7 @@ def find_browser_previous_session(
 	Returns:
 		Optional[int]: The port number of the previous session if found and matched, otherwise None.
 	"""
+	
 	executables_table = get_active_executables_table(browser_exe)
 	
 	for index, row in executables_table.iterrows():
@@ -152,17 +160,12 @@ def build_first_start_argument(browser_exe: Union[str, pathlib.Path]) -> str:
 		str: The constructed command line argument string.
 
 	Raises:
-		PlatformNotSupportedError: If the platform is not supported.
 		TypeError: If `browser_exe` is not of type str or pathlib.Path.
 	"""
+	
 	if isinstance(browser_exe, str):
 		return browser_exe
 	elif isinstance(browser_exe, pathlib.Path):
-		if sys.platform == "win32":
-			return f"cd /d \"{str(browser_exe.parent.resolve())}\" && {browser_exe.name}"
-		elif sys.platform in ["linux", "darwin"]:
-			return f"cd \"{str(browser_exe.parent.resolve())}\" && ./{browser_exe.name}"
-		else:
-			raise PlatformNotSupportedError(f"Unsupported platform: {sys.platform}.")
+		return f"\"{str(browser_exe.resolve())}\""
 	else:
 		raise TypeError(f"browser_exe must be str or pathlib.Path, not {type(browser_exe)}.")

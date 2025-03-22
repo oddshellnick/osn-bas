@@ -12,4 +12,5 @@ class PlatformNotSupportedError(Exception):
 		Args:
 		   platform (str): The name of the unsupported operating system.
 		"""
+		
 		super().__init__(f"Platform not supported: {platform}.")

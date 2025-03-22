@@ -14,6 +14,7 @@ class Browser(TypedDict):
 		path (pathlib.Path): The file path to the browser executable.
 		version (str): The version number of the browser.
 	"""
+	
 	name: str
 	path: pathlib.Path
 	version: str
