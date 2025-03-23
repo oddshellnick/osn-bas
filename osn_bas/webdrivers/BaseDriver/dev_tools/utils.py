@@ -1,4 +1,7 @@
+import sys
+import logging
 import warnings
+import traceback
 import functools
 from typing import Callable
 
@@ -28,5 +31,37 @@ def warn_if_active(func: Callable) -> Callable:
 			warnings.warn(
 					message="DevTools is active. Exit dev_tools context before changing settings."
 			)
+	
+	return wrapper
+
+
+def log_on_error(func: Callable) -> Callable:
+	"""
+	Decorator to log any exceptions that occur during the execution of the decorated function.
+
+	This decorator wraps a function and executes it within a try-except block.
+	If an exception is raised during the function's execution, it logs the full traceback
+	using the logging.ERROR level and then returns None. If no exception occurs, it returns the result of the function as usual.
+
+	Args:
+		func (Callable): The function to be decorated.
+
+	Returns:
+		Callable: The wrapped function. Returns the result of the decorated function if execution is successful, otherwise returns None if an exception occurs.
+	"""
+	
+	@functools.wraps(func)
+	def wrapper(*args, **kwargs):
+		try:
+			return func(*args, **kwargs)
+		except (Exception,):
+			exception_type, exception_value, exception_traceback = sys.exc_info()
+			error = "".join(
+					traceback.format_exception(exception_type, exception_value, exception_traceback)
+			)
+		
+			logging.log(logging.ERROR, error)
+		
+			return None
 	
 	return wrapper

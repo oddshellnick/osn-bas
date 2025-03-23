@@ -7,7 +7,6 @@ from collections.abc import Awaitable
 import osn_bas.webdrivers.BaseDriver.dev_tools.fetch as fetch
 from selenium.webdriver.common.bidi.cdp import CdpSession, open_cdp
 from selenium.webdriver.remote.bidi_connection import BidiConnection
-from osn_bas.webdrivers.BaseDriver.dev_tools.utils import warn_if_active
 from contextlib import (
 	AbstractAsyncContextManager,
 	asynccontextmanager
@@ -18,6 +17,10 @@ from osn_bas.webdrivers.BaseDriver.protocols import (
 from osn_bas.webdrivers.BaseDriver.dev_tools.types import (
 	CallbacksSettings,
 	Fetch
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+	log_on_error,
+	warn_if_active
 )
 from typing import (
 	Any,
@@ -299,27 +302,19 @@ class DevTools:
 		if self._webdriver.driver is None:
 			raise RuntimeError("Driver is not initialized.")
 		
-		try:
-			self._bidi_connection: AbstractAsyncContextManager[BidiConnection, Any] = self._webdriver.driver.bidi_connection()
-			self._bidi_connection_object = await self._bidi_connection.__aenter__()
-			self._bidi_devtools = self._bidi_connection_object.devtools
+		self._bidi_connection: AbstractAsyncContextManager[BidiConnection, Any] = self._webdriver.driver.bidi_connection()
+		self._bidi_connection_object = await self._bidi_connection.__aenter__()
+		self._bidi_devtools = self._bidi_connection_object.devtools
 		
-			self._nursery = trio.open_nursery()
-			self._nursery_object = await self._nursery.__aenter__()
+		self._nursery = trio.open_nursery()
+		self._nursery_object = await self._nursery.__aenter__()
 		
-			await self._start_listeners(self._bidi_connection_object.session)
+		await self._start_listeners(self._bidi_connection_object.session)
 		
-			self._is_active = True
-			self._exit_event = trio.Event()
+		self._is_active = True
+		self._exit_event = trio.Event()
 		
-			return cast(TrioWebDriverWrapperProtocol, self._webdriver.to_wrapper())
-		except (Exception,):
-			exception_type, exception_value, exception_traceback = sys.exc_info()
-			error = "".join(
-					traceback.format_exception(exception_type, exception_value, exception_traceback)
-			)
-		
-			logging.log(logging.ERROR, error)
+		return cast(TrioWebDriverWrapperProtocol, self._webdriver.to_wrapper())
 	
 	async def __aexit__(
 			self,
@@ -340,42 +335,49 @@ class DevTools:
 			exc_tb (Optional[traceback.TracebackType]): The exception traceback, if any.
 		"""
 		
-		try:
-			if self._is_active:
-				try:
-					if self._exit_event is not None:
-						self._exit_event.set()
-				finally:
-					self._exit_event = None
-
-				try:
-					if self._nursery_object is not None:
-						self._nursery_object.cancel_scope.cancel()
-				finally:
-					self._nursery_object = None
-
-				try:
-					if self._nursery is not None:
-						await self._nursery.__aexit__(exc_type, exc_val, exc_tb)
-				finally:
-					self._nursery = None
-
-				try:
-					if self._bidi_connection is not None:
-						await self._bidi_connection.__aexit__(exc_type, exc_val, exc_tb)
-						self._bidi_connection = None
-				finally:
-					self._bidi_connection = None
-					self._bidi_connection_object = None
-					self._bidi_devtools = None
-		except (Exception,):
-			exception_type, exception_value, exception_traceback = sys.exc_info()
-			error = "".join(
-					traceback.format_exception(exception_type, exception_value, exception_traceback)
-			)
+		@log_on_error
+		def _close_nursery_object():
+			"""Closes the Trio nursery object and cancels all tasks within it."""
+			
+			if self._nursery_object is not None:
+				self._nursery_object.cancel_scope.cancel()
 		
-			logging.log(logging.ERROR, error)
-		finally:
+		@log_on_error
+		async def _close_nursery():
+			"""Asynchronously exits the Trio nursery context manager."""
+			
+			if self._nursery is not None:
+				await self._nursery.__aexit__(exc_type, exc_val, exc_tb)
+		
+		@log_on_error
+		async def _close_bidi_connection():
+			"""Asynchronously exits the BiDi connection context manager."""
+			
+			if self._bidi_connection is not None:
+				await self._bidi_connection.__aexit__(exc_type, exc_val, exc_tb)
+		
+		@log_on_error
+		def _activate_exit_event():
+			"""Sets the exit event to signal listeners to stop."""
+			
+			if self._exit_event is not None:
+				self._exit_event.set()
+		
+		if self._is_active:
+			_activate_exit_event()
+			self._exit_event = None
+		
+			_close_nursery_object()
+			self._nursery_object = None
+		
+			await _close_nursery()
+			self._nursery = None
+		
+			await _close_bidi_connection()
+			self._bidi_connection = None
+			self._bidi_connection_object = None
+			self._bidi_devtools = None
+		
 			self._is_active = False
 	
 	async def _handle_fetch_request_paused(

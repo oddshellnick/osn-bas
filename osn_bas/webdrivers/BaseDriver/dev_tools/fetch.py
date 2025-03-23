@@ -11,17 +11,6 @@ from typing import (
 )
 
 
-post_data_handler_type = Callable[
-	["RequestPausedHandlerSettings", Any],
-	Union[Optional[str], Awaitable[Optional[str]]]
-]
-headers_handler_type = Callable[
-	["RequestPausedHandlerSettings", type, Any],
-	Union[list[Any], Awaitable[list[Any]]]
-]
-header_entry_type = TypeVar("header_entry_type")
-
-
 class HeaderInstance(TypedDict):
 	"""
 	Type definition for header modification instructions.
@@ -66,8 +55,8 @@ class RequestPausedHandlerSettings(TypedDict):
 	class_to_use_path: str
 	post_data_instances: Optional[Any]
 	headers_instances: Optional[dict[str, HeaderInstance]]
-	post_data_handler: post_data_handler_type
-	headers_handler: headers_handler_type
+	post_data_handler: "post_data_handler_type"
+	headers_handler: "headers_handler_type"
 
 
 def default_post_data_handler(handler_settings: RequestPausedHandlerSettings, event: Any) -> Optional[str]:
@@ -94,9 +83,9 @@ def default_post_data_handler(handler_settings: RequestPausedHandlerSettings, ev
 
 def default_headers_handler(
 		handler_settings: RequestPausedHandlerSettings,
-		header_entry_class: header_entry_type,
+		header_entry_class: "header_entry_type",
 		event: Any
-) -> list[header_entry_type]:
+) -> list["header_entry_type"]:
 	"""
 	Default handler for processing and modifying request headers when a 'requestPaused' event is triggered.
 	This handler modifies request headers based on the 'mode' specified in the handler settings
@@ -139,3 +128,14 @@ def default_headers_handler(
 		header_entry_class(name=name, value=value)
 		for name, value in headers.items()
 	]
+
+
+post_data_handler_type = Callable[
+	[RequestPausedHandlerSettings, Any],
+	Union[Optional[str], Awaitable[Optional[str]]]
+]
+headers_handler_type = Callable[
+	[RequestPausedHandlerSettings, type, Any],
+	Union[list[Any], Awaitable[list[Any]]]
+]
+header_entry_type = TypeVar("header_entry_type")

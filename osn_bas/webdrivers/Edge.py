@@ -103,14 +103,13 @@ class EdgeStartArgs(BrowserStartArgs):
 		_mute_audio_command_line (str): Command-line argument for mute audio.
 		_user_agent_command_line (str): Command-line format for user agent.
 		_proxy_server_command_line (str): Command-line format for proxy server.
-		_start_page_url (str): Default start page URL.
-		_debugging_port (Optional[int]): Current debugging port number.
-		_profile_dir (Optional[str]): Current profile directory path.
-		_headless_mode (Optional[bool]): Current headless mode status.
-		_mute_audio (Optional[bool]): Current mute audio status.
-		_user_agent (Optional[str]): Current user agent string.
-		_proxy_server (Optional[str]): Current proxy server address.
-		_start_command (str): Full start command for Edge.
+		start_page_url (str): Default start page URL.
+		debugging_port (Optional[int]): Current debugging port number.
+		profile_dir (Optional[str]): Current profile directory path.
+		headless_mode (Optional[bool]): Current headless mode status.
+		mute_audio (Optional[bool]): Current mute audio status.
+		user_agent (Optional[str]): Current user agent string.
+		proxy_server (Optional[str]): Current proxy server address.
 	"""
 	
 	def __init__(self, browser_exe: Union[str, pathlib.Path]):
@@ -132,7 +131,6 @@ class EdgeStartArgs(BrowserStartArgs):
 				"--mute-audio",
 				"--user-agent=\"{value}\"",
 				"--proxy-server=\"{value}\"",
-				"https://www.google.com",
 		)
 
 
@@ -155,7 +153,6 @@ class EdgeWebDriver(BrowserWebDriver):
 		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
 		_base_page_load_timeout (int): Base page load timeout for page loading operations.
 		_is_active (bool): Indicates if the WebDriver instance is currently active.
-		_enable_devtools (bool): Flag to enable or disable DevTools integration.
 		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
 	"""
 	
@@ -164,35 +161,42 @@ class EdgeWebDriver(BrowserWebDriver):
 			webdriver_path: str,
 			enable_devtools: bool,
 			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			hide_automation: bool = True,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
+			headless_mode: bool = False,
+			mute_audio: bool = False,
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: str = "https://www.google.com",
 	):
 		"""
-		Initializes EdgeWebDriver.
+		Initializes the EdgeWebDriver instance for managing Edge Browser.
 
-		Constructs an EdgeWebDriver instance, configuring paths, options managers,
-		and default settings for controlling a Microsoft Edge browser with Selenium WebDriver.
+		This constructor sets up the WebDriver specifically for Edge Browser,
+		configuring browser and driver paths, and applying default or user-specified settings
+		for browser behavior like headless mode, proxy, and DevTools.
 
 		Args:
-			webdriver_path (str): Path to the MSEdgeDriver executable.
-			enable_devtools (bool): Whether to enable DevTools integration.
-			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Microsoft Edge browser executable. If None, it attempts to find Edge. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for Edge. Defaults to None.
-			profile_dir (Optional[str]): Path to the Edge profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start Edge in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in Edge. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for Edge. Defaults to None.
-			user_agent (Optional[str]): User agent string to use for Edge. Defaults to None.
-			implicitly_wait (int): Default implicit wait timeout in seconds. Defaults to 5.
-			page_load_timeout (int): Default page load timeout in seconds. Defaults to 5.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+			webdriver_path (str): Path to the EdgeDriver executable compatible with Edge Browser.
+			enable_devtools (bool): Enables or disables the use of DevTools for this browser instance.
+			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Edge Browser executable.
+				If None, the path is automatically detected. Defaults to None.
+			hide_automation (bool): Hides automation indicators in the browser if True. Defaults to True.
+			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory to be used. Defaults to None.
+			headless_mode (bool): Runs Edge Browser in headless mode if True. Defaults to False.
+			mute_audio (bool): Mutes audio output in Edge Browser if True. Defaults to False.
+			proxy (Optional[Union[str, list[str]]]): Proxy settings for Edge Browser.
+				Can be a single proxy string or a list of proxy strings. Defaults to None.
+			user_agent (Optional[str]): Custom user agent string for Edge Browser. Defaults to None.
+			implicitly_wait (int): Base implicit wait time for WebDriver element searches in seconds. Defaults to 5.
+			page_load_timeout (int): Base page load timeout for WebDriver operations in seconds. Defaults to 5.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings for the browser window. Defaults to None.
+			start_page_url (str): URL to open when the browser starts. Defaults to "https://www.google.com".
 		"""
 		
 		if browser_exe is None:
@@ -204,6 +208,7 @@ class EdgeWebDriver(BrowserWebDriver):
 				enable_devtools=enable_devtools,
 				webdriver_start_args=EdgeStartArgs,
 				webdriver_options_manager=EdgeOptionsManager,
+				hide_automation=hide_automation,
 				debugging_port=debugging_port,
 				profile_dir=profile_dir,
 				headless_mode=headless_mode,
@@ -213,6 +218,7 @@ class EdgeWebDriver(BrowserWebDriver):
 				implicitly_wait=implicitly_wait,
 				page_load_timeout=page_load_timeout,
 				window_rect=window_rect,
+				start_page_url=start_page_url,
 		)
 	
 	def create_driver(self):

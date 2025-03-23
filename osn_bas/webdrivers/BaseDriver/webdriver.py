@@ -51,7 +51,6 @@ class BrowserWebDriver:
 		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
 		_base_page_load_timeout (int): Base page load timeout for page loading operations.
 		_is_active (bool): Indicates if the WebDriver instance is currently active.
-		_enable_devtools (bool): Flag to enable or disable DevTools integration.
 		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
 	"""
 	
@@ -62,37 +61,41 @@ class BrowserWebDriver:
 			enable_devtools: bool,
 			webdriver_start_args: type,
 			webdriver_options_manager: type,
+			hide_automation: bool = False,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
+			headless_mode: bool = False,
+			mute_audio: bool = False,
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: str = "",
 	):
 		"""
 		Initializes the BrowserWebDriver instance.
 
-		Sets up the WebDriver with browser and WebDriver paths, initializes option managers,
-		and configures default settings such as timeouts and window rectangle.
+		Configures and sets up the WebDriver for browser automation, including
+		settings for browser executable path, WebDriver path, and various browser options.
 
 		Args:
 			browser_exe (Union[str, pathlib.Path]): Path to the browser executable.
 			webdriver_path (str): Path to the WebDriver executable.
-			enable_devtools (bool): Whether to enable DevTools integration.
-			webdriver_start_args (type): Class for managing WebDriver startup arguments.
-			webdriver_options_manager (type): Class for managing browser options.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
+			enable_devtools (bool): Enables or disables DevTools integration.
+			webdriver_start_args (type[BrowserStartArgs]): Class for managing WebDriver startup arguments.
+			webdriver_options_manager (type[BrowserOptionsManager]): Class for managing browser options.
+			hide_automation (bool): Hides automation indicators in the browser. Defaults to False.
+			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
 			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			implicitly_wait (int): Default implicit wait timeout in seconds. Defaults to 5.
-			page_load_timeout (int): Default page load timeout in seconds. Defaults to 5.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+			headless_mode (bool): Runs the browser in headless mode if True. Defaults to False.
+			mute_audio (bool): Mutes audio output in the browser. Defaults to False.
+			proxy (Optional[Union[str, list[str]]]): Proxy settings for the browser. Can be a single proxy string or a list. Defaults to None.
+			user_agent (Optional[str]): Custom user agent string for the browser. Defaults to None.
+			implicitly_wait (int): Base implicit wait time for WebDriver element searches. Defaults to 5 seconds.
+			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5 seconds.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to a default WindowRect instance if None.
+			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
 		"""
 		
 		if window_rect is None:
@@ -110,16 +113,18 @@ class BrowserWebDriver:
 		self._base_implicitly_wait = implicitly_wait
 		self._base_page_load_timeout = page_load_timeout
 		self._is_active = False
-		self._enable_devtools = enable_devtools
 		self.dev_tools = DevTools(self)
 		
 		self.update_settings(
+				enable_devtools=enable_devtools,
+				hide_automation=hide_automation,
 				debugging_port=debugging_port,
 				profile_dir=profile_dir,
 				headless_mode=headless_mode,
 				mute_audio=mute_audio,
 				proxy=proxy,
-				user_agent=user_agent
+				user_agent=user_agent,
+				start_page_url=start_page_url,
 		)
 	
 	def switch_to_window(self, window: Optional[Union[str, int]] = None):
@@ -526,6 +531,9 @@ class BrowserWebDriver:
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
+	def set_start_page_url(self, start_page_url: str):
+		self._webdriver_start_args.start_page_url = start_page_url
+	
 	def set_user_agent(self, user_agent: Optional[str]):
 		"""
 		Sets the user agent.
@@ -537,7 +545,7 @@ class BrowserWebDriver:
 			user_agent (Optional[str]): User agent string to use. If None, the user agent setting is removed, reverting to the browser's default.
 		"""
 		
-		self._webdriver_start_args.set_user_agent(user_agent)
+		self._webdriver_start_args.user_agent = user_agent
 	
 	def set_headless_mode(self, headless_mode: bool):
 		"""
@@ -550,7 +558,7 @@ class BrowserWebDriver:
 			headless_mode (bool): Whether to start the browser in headless mode. True for headless, False for visible browser UI.
 		"""
 		
-		self._webdriver_start_args.set_headless_mode(headless_mode)
+		self._webdriver_start_args.headless_mode = headless_mode
 	
 	def set_mute_audio(self, mute_audio: bool):
 		"""
@@ -563,7 +571,7 @@ class BrowserWebDriver:
 			mute_audio (bool): Whether to mute audio in the browser. True to mute, False to unmute.
 		"""
 		
-		self._webdriver_start_args.set_mute_audio(mute_audio)
+		self._webdriver_start_args.mute_audio = mute_audio
 	
 	def set_proxy(self, proxy: Optional[Union[str, list[str]]]):
 		"""
@@ -578,7 +586,7 @@ class BrowserWebDriver:
 				If None, proxy settings are removed.
 		"""
 		
-		self._webdriver_start_args.set_proxy_server(proxy)
+		self._webdriver_start_args.proxy_server = proxy
 	
 	def set_profile_dir(self, profile_dir: Optional[str]):
 		"""
@@ -592,7 +600,7 @@ class BrowserWebDriver:
 			profile_dir (Optional[str]): Path to the browser profile directory. If None, a default or temporary profile is used.
 		"""
 		
-		self._webdriver_start_args.set_profile_dir(profile_dir)
+		self._webdriver_start_args.profile_dir = profile_dir
 	
 	def set_debugging_port(self, debugging_port: Optional[int]):
 		"""
@@ -606,8 +614,21 @@ class BrowserWebDriver:
 			debugging_port (Optional[int]): Debugging port number. If None, the browser chooses a port automatically.
 		"""
 		
-		self._webdriver_start_args.set_debugging_port(debugging_port)
+		self._webdriver_start_args.debugging_port = debugging_port
 		self._webdriver_options_manager.set_debugger_address(debugging_port)
+	
+	def hide_automation(self, hide: bool):
+		"""
+		Sets whether to hide browser automation indicators.
+
+		This method configures the browser options to hide or show automation
+		indicators, which are typically present when a browser is controlled by WebDriver.
+
+		Args:
+			hide (bool): If True, hides automation indicators; otherwise, shows them.
+		"""
+		
+		self._webdriver_options_manager.hide_automation(hide)
 	
 	def set_enable_devtools(self, enable_devtools: bool):
 		"""
@@ -625,42 +646,49 @@ class BrowserWebDriver:
 	def reset_settings(
 			self,
 			enable_devtools: bool,
+			hide_automation: bool = False,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
+			headless_mode: bool = False,
+			mute_audio: bool = False,
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: str = "",
 	):
 		"""
-		Resets various browser settings to the specified values.
+		Resets all configurable browser settings to their default or specified values.
 
-		Allows for bulk resetting of multiple browser settings such as DevTools enablement, debugging port,
-		profile directory, proxy, mute audio, headless mode, user agent, and window rectangle. This is useful
-		for quickly reconfiguring the browser instance to a known state.
+		This method resets various browser settings to the provided values. If no value
+		is provided for certain settings, they are reset to their default states.
+		This includes DevTools, automation hiding, debugging port, profile directory,
+		proxy, audio muting, headless mode, user agent, and window rectangle.
 
 		Args:
-			enable_devtools (bool): Whether to enable DevTools integration.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+			enable_devtools (bool): Enables or disables DevTools integration.
+			hide_automation (bool): Sets whether to hide browser automation indicators. Defaults to False.
+			debugging_port (Optional[int]): Specifies the debugging port for the browser. Defaults to None.
+			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
+			headless_mode (bool): Enables or disables headless mode. Defaults to False.
+			mute_audio (bool): Mutes or unmutes audio output in the browser. Defaults to False.
+			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
+			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
+			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
 		"""
 		
 		if window_rect is None:
 			window_rect = WindowRect()
 		
 		self.set_enable_devtools(enable_devtools)
+		self.hide_automation(hide_automation)
 		self.set_debugging_port(debugging_port)
 		self.set_profile_dir(profile_dir)
 		self.set_proxy(proxy)
 		self.set_mute_audio(mute_audio)
 		self.set_headless_mode(headless_mode)
 		self.set_user_agent(user_agent)
+		self.set_start_page_url(start_page_url)
 		self._window_rect = window_rect
 	
 	@property
@@ -746,6 +774,7 @@ class BrowserWebDriver:
 	def update_settings(
 			self,
 			enable_devtools: Optional[bool] = None,
+			hide_automation: Optional[bool] = None,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
 			headless_mode: Optional[bool] = None,
@@ -753,26 +782,33 @@ class BrowserWebDriver:
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: Optional[str] = None,
 	):
 		"""
-		Updates browser settings dynamically.
+		Updates various browser settings after initialization.
 
-		Allows for updating various browser settings after the WebDriver instance has been initialized but before starting the browser session.
-		Settings that can be updated include DevTools enablement, debugging port, profile directory, headless mode, mute audio, proxy, user agent, and window rectangle.
+		This method allows for dynamic updating of browser settings such as
+		DevTools enablement, automation hiding, debugging port, profile directory,
+		headless mode, audio muting, proxy configuration, user agent string, and window rectangle.
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+			enable_devtools (Optional[bool]): Enables or disables DevTools integration. Defaults to None.
+			hide_automation (Optional[bool]): Sets whether to hide browser automation indicators. Defaults to None.
+			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
+			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
+			headless_mode (Optional[bool]): Enables or disables headless mode. Defaults to None.
+			mute_audio (Optional[bool]): Mutes or unmutes audio output in the browser. Defaults to None.
+			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
+			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
+			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
 		"""
 		
 		if enable_devtools is not None:
 			self.set_enable_devtools(enable_devtools)
+		
+		if hide_automation is not None:
+			self.hide_automation(hide_automation)
 		
 		if profile_dir is not None:
 			self.set_profile_dir(profile_dir)
@@ -792,6 +828,9 @@ class BrowserWebDriver:
 		if window_rect is not None:
 			self._window_rect = window_rect
 		
+		if start_page_url is not None:
+			self.set_start_page_url(start_page_url)
+		
 		self.set_debugging_port(self.find_debugging_port(debugging_port, profile_dir))
 	
 	def start_webdriver(
@@ -804,6 +843,7 @@ class BrowserWebDriver:
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: Optional[str] = None,
 	):
 		"""
 		Starts the WebDriver and browser session.
@@ -821,6 +861,7 @@ class BrowserWebDriver:
 			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
 			user_agent (Optional[str]): User agent string to use. Defaults to None.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
+			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
 		"""
 		
 		if self.driver is None:
@@ -832,7 +873,8 @@ class BrowserWebDriver:
 					mute_audio=mute_audio,
 					proxy=proxy,
 					user_agent=user_agent,
-					window_rect=window_rect
+					window_rect=window_rect,
+					start_page_url=start_page_url,
 			)
 		
 			self._is_active = self.check_webdriver_active()
@@ -878,6 +920,7 @@ class BrowserWebDriver:
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: Optional[str] = None,
 	):
 		"""
 		Restarts the WebDriver and browser session.
@@ -895,6 +938,7 @@ class BrowserWebDriver:
 			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for the new session. Defaults to None.
 			user_agent (Optional[str]): User agent string to use for the new session. Defaults to None.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings for the new session. Defaults to None.
+			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
 		"""
 		
 		self.close_webdriver()
@@ -908,7 +952,8 @@ class BrowserWebDriver:
 				mute_audio=mute_audio,
 				proxy=proxy,
 				user_agent=user_agent,
-				window_rect=window_rect
+				window_rect=window_rect,
+				start_page_url=start_page_url,
 		)
 	
 	def scroll_by_amount(self, x: int = 0, y: int = 0, duration: int = 250):
