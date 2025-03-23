@@ -18,9 +18,8 @@ from osn_bas.webdrivers.BaseDriver.dev_tools.types import (
 	CallbacksSettings,
 	Fetch
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
-	log_on_error,
-	warn_if_active
+from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
+	CantEnterDevToolsContextError
 )
 from typing import (
 	Any,
@@ -30,6 +29,11 @@ from typing import (
 	Optional,
 	TYPE_CHECKING,
 	cast
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+	log_on_error,
+	validate_handler_settings,
+	warn_if_active
 )
 
 
@@ -92,6 +96,10 @@ class DevTools:
 
 		Args:
 			cdp_session (CdpSession): The CDP session object to use for starting listeners.
+
+		Raises:
+			WrongHandlerSettingsTypeError: If the handler_settings is not a dictionary.
+			WrongHandlerSettingsError: If the handler_settings does not contain exactly one of the required keys.
 		"""
 		
 		try:
@@ -104,7 +112,10 @@ class DevTools:
 		
 					for event_name, handler_settings in event_type_config.items():
 						if event_name not in ["use", "enable_func_path", "disable_func_path"] and handler_settings is not None:
-							self._nursery_object.start_soon(self._run_event_listener, cdp_session, event_type, event_name)
+							validate_handler_settings(handler_settings)
+		
+							if handler_settings.get("class_to_use_path", None) is not None:
+								self._nursery_object.start_soon(self._run_event_listener, cdp_session, event_type, event_name)
 		
 			await trio.sleep(0.0)
 		except trio.Cancelled:
@@ -288,7 +299,7 @@ class DevTools:
 				 while DevTools event handling is active.
 
 		Raises:
-			RuntimeError: If the WebDriver driver is not initialized.
+			CantEnterDevToolsContextError: If the WebDriver driver is not initialized, indicating that a browser session has not been started yet.
 
 		Usage
 		______
@@ -300,7 +311,7 @@ class DevTools:
 		"""
 		
 		if self._webdriver.driver is None:
-			raise RuntimeError("Driver is not initialized.")
+			raise CantEnterDevToolsContextError("Driver is not initialized")
 		
 		self._bidi_connection: AbstractAsyncContextManager[BidiConnection, Any] = self._webdriver.driver.bidi_connection()
 		self._bidi_connection_object = await self._bidi_connection.__aenter__()
