@@ -94,11 +94,11 @@ def default_headers_handler(
 	Args:
 		handler_settings (RequestPausedHandlerSettings): The settings configured for handling 'requestPaused' events,
 			including the modification mode and header instances.
-		header_entry_class (type): The class for header entry from the DevTools protocol, e.g., `fetch.HeaderEntry`.
+		header_entry_class (header_entry_type): The class for header entry from the DevTools protocol, e.g., `fetch.HeaderEntry`.
 		event (Any): The 'fetch.RequestPaused' event object from DevTools, containing details about the paused request, including its headers.
 
 	Returns:
-		list[Any]: A list of header entries, each an instance of `header_entry_class`, representing the modified headers,
+		list[header_entry_type]: A list of header entries, each an instance of `header_entry_class`, representing the modified headers,
 			ready to be sent back to DevTools to continue the request.
 	"""
 	

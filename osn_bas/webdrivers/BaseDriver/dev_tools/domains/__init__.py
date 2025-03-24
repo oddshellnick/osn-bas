@@ -1,5 +1,5 @@
 from typing import Optional, TypedDict
-from osn_bas.webdrivers.BaseDriver.dev_tools.fetch import (
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains.fetch import (
 	RequestPausedHandlerSettings
 )
 
@@ -40,3 +40,6 @@ class CallbacksSettings(TypedDict):
 	"""
 	
 	fetch: Fetch
+
+
+special_keys = ["use", "enable_func_path", "disable_func_path"]

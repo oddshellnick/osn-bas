@@ -5,19 +5,21 @@ from types import TracebackType
 from osn_bas.utilities import WindowRect
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.bidi.cdp import CdpSession
-from osn_bas.webdrivers.BaseDriver.dev_tools import fetch
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.bidi_connection import BidiConnection
 from osn_bas.webdrivers.BaseDriver.start_args import BrowserStartArgs
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.remote.remote_connection import RemoteConnection
-from osn_bas.webdrivers.BaseDriver.dev_tools.types import CallbacksSettings
 from osn_bas.webdrivers.BaseDriver.options import (
 	BrowserOptionsManager
 )
 from contextlib import (
 	AbstractAsyncContextManager,
 	asynccontextmanager
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
+	CallbacksSettings,
+	fetch
 )
 from typing import (
 	Any,

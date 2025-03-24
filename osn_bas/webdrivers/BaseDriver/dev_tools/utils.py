@@ -3,7 +3,7 @@ import logging
 import warnings
 import traceback
 import functools
-from typing import Callable
+from typing import Callable, Literal
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	WrongHandlerSettingsError,
 	WrongHandlerSettingsTypeError
@@ -39,7 +39,7 @@ def warn_if_active(func: Callable) -> Callable:
 	return wrapper
 
 
-def validate_handler_settings(handler_settings: dict):
+def validate_handler_settings(handler_settings: dict) -> Literal["class", "function"]:
 	"""
 	Validates the structure of event handler settings.
 
@@ -49,6 +49,11 @@ def validate_handler_settings(handler_settings: dict):
 
 	Args:
 		handler_settings (dict): The dictionary containing event handler settings to be validated.
+
+	Returns:
+		Literal["class", "function"]:
+			- "class" if 'class_to_use_path' key is present.
+			- "function" if 'function_to_use_path' key is present.
 
 	Raises:
 		WrongHandlerSettingsTypeError: If the handler_settings is not a dictionary.
@@ -61,6 +66,12 @@ def validate_handler_settings(handler_settings: dict):
 	one_of_keys = ["class_to_use_path", "function_to_use_path"]
 	if sum(1 for key in one_of_keys if handler_settings.get(key, None) is not None) != 1:
 		raise WrongHandlerSettingsError(handler_settings, one_of_keys)
+	
+	if "class_to_use_path" in handler_settings:
+		return "class"
+	
+	if "function_to_use_path" in handler_settings:
+		return "function"
 
 
 def log_on_error(func: Callable) -> Callable:
