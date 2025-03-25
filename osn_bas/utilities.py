@@ -11,13 +11,6 @@ class WindowRect:
 		y (int): The y-coordinate of the top-left corner. Defaults to 10% of screen height.
 		width (int): The width of the rectangle. Defaults to 1/2 of screen width.
 		height (int): The height of the rectangle. Defaults to 80% of screen height.
-
-	:Usage:
-		rect = WindowRect()
-		print(rect.x, rect.y, rect.width, rect.height)
-
-		rect = WindowRect(x=100, y=50, width=800, height=600)
-		print(rect.x, rect.y, rect.width, rect.height)
 	"""
 	
 	def __init__(
@@ -35,10 +28,8 @@ class WindowRect:
 			y (Optional[int]): The y-coordinate. Defaults to None.
 			width (Optional[int]): The width. Defaults to None.
 			height (Optional[int]): The height. Defaults to None.
-
-		:Usage:
-		   rect = WindowRect(0, 0, 300, 200)
 		"""
+		
 		self.x = GetSystemMetrics(0) // 4
 		
 		self.y = int(GetSystemMetrics(1) * 0.1)
@@ -67,10 +58,8 @@ class WindowRect:
 
 		Returns:
 			WindowRect: Returns the instance for method chaining.
-
-		:Usage:
-			rect = WindowRect().set_rect(0, 0, 300, 200)
 		"""
+		
 		if x is not None:
 			self.x = x
 		

@@ -6,32 +6,38 @@ from osn_bas.webdrivers.types import WebdriverOption
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from osn_bas.browsers_handler import get_path_to_browser
+from osn_bas.webdrivers.BaseDriver.webdriver import BrowserWebDriver
+from osn_bas.webdrivers.BaseDriver.start_args import BrowserStartArgs
 from selenium.webdriver.remote.remote_connection import RemoteConnection
-from osn_bas.webdrivers.BaseDriver import (
-	BrowserOptionsManager,
-	BrowserStartArgs,
-	BrowserWebDriver
+from osn_bas.webdrivers.BaseDriver.options import (
+	BrowserOptionsManager
 )
 
 
 class ChromeOptionsManager(BrowserOptionsManager):
 	"""
-	Manages Chrome webdriver options.
+	Manages Chrome-specific browser options for Selenium WebDriver.
 
-	This class extends `BrowserOptionsManager` to provide specific management for Chrome browser options.
-	It configures and applies settings to a Chrome WebDriver instance, such as user agent, proxy, and automation hiding.
+	This class extends BrowserOptionsManager to provide specific configurations
+	for Chrome browser options, such as experimental options and arguments.
+	It initializes default Chrome options and provides methods to modify them.
 
 	Attributes:
-		options (Options): The Chrome options object from Selenium.
-		debugging_port_command (str): Command-line argument format string for setting the debugging port.
-		user_agent_command (str): Command-line argument format string for setting the user agent.
-		proxy_command (str): Command-line argument format string for setting the proxy.
+		_options (webdriver.ChromeOptions): Chrome options object.
+		_debugging_port_command (WebdriverOption): Configuration for debugging port option.
+		_user_agent_command (WebdriverOption): Configuration for user agent option.
+		_proxy_command (WebdriverOption): Configuration for proxy option.
+		_enable_bidi_command (WebdriverOption): Configuration for enable BiDi option.
 	"""
 	
 	def __init__(self):
 		"""
 		Initializes ChromeOptionsManager.
+
+		Sets up the Chrome options manager with specific option configurations for
+		debugging port, user agent, proxy, and BiDi protocol.
 		"""
+		
 		super().__init__(
 				WebdriverOption(
 						name="debugger_address_",
@@ -40,17 +46,20 @@ class ChromeOptionsManager(BrowserOptionsManager):
 				),
 				WebdriverOption(name="user_agent_", command="--user-agent=\"{value}\"", type="normal"),
 				WebdriverOption(name="proxy_", command="--proxy-server=\"{value}\"", type="normal"),
+				WebdriverOption(name="enable_bidi_", command="enable_bidi", type="attribute"),
 		)
 	
 	def hide_automation(self, hide: bool):
 		"""
 		Adds arguments to hide automation features in Chrome.
 
-		This method adds Chrome-specific arguments to disable automation detection, making the browser appear more like a regular user.
+		This method configures Chrome options to reduce the detectability of automated browsing,
+		making it harder for websites to identify the browser as being controlled by automation software.
 
 		Args:
-			hide (bool): If True, adds arguments to hide automation; otherwise, removes them.
+			hide (bool): If True, adds arguments to hide automation; if False, removes them.
 		"""
+		
 		if hide:
 			self.set_argument(
 					"disable_blink_features_",
@@ -65,48 +74,57 @@ class ChromeOptionsManager(BrowserOptionsManager):
 			self.remove_argument("no_service_autorun_")
 			self.remove_argument("password_store_")
 	
-	def renew_webdriver_options(self):
+	def renew_webdriver_options(self) -> Options:
 		"""
 		Creates and returns a new Chrome Options object.
 
-		This method is responsible for creating a fresh instance of Selenium's Chrome `Options` class,
-		which is used to configure the Chrome WebDriver.
+		Returns a fresh instance of `webdriver.ChromeOptions`, allowing for a clean
+		state of browser options to be configured.
 
 		Returns:
 			Options: A new Selenium Chrome Options object.
 		"""
+		
 		return Options()
 
 
 class ChromeStartArgs(BrowserStartArgs):
 	"""
-	Manages Chrome webdriver startup arguments.
+	Manages Chrome-specific browser start arguments for Selenium WebDriver.
 
-	This class extends `BrowserStartArgs` to provide specific management for Chrome browser startup command-line arguments.
-	It configures arguments such as debugging port, user data directory, headless mode, mute audio, and user agent for Chrome.
+	This class extends BrowserStartArgs and is tailored for Chrome. It defines
+	command-line arguments specific to starting the Chrome browser with configurations
+	suitable for WebDriver control, such as remote debugging port, user profile directory,
+	headless mode, and proxy settings.
 
 	Attributes:
-		browser_exe (str): Path to the browser executable.
-		start_command (str): The assembled start command string for launching Chrome.
-		debugging_port_command_line (str): Command-line argument format string for setting the debugging port.
-		profile_dir_command_line (str): Command-line argument format string for setting the user data directory (profile directory).
-		headless_mode_command_line (str): Command-line argument for launching Chrome in headless mode.
-		mute_audio_command_line (str): Command-line argument for muting audio in Chrome.
-		user_agent_command_line (str): Command-line argument format string for setting the user agent.
-		debugging_port (Optional[int]): The debugging port number. Defaults to None.
-		profile_dir (Optional[str]): The user data directory (profile directory) path. Defaults to None.
-		user_agent (Optional[str]): The user agent string. Defaults to None.
-		headless_mode (bool): Whether headless mode is enabled. Defaults to False.
-		mute_audio (bool): Whether mute audio is enabled. Defaults to False.
+		_browser_exe (Union[str, pathlib.Path]): Path to the Chrome executable.
+		_debugging_port_command_line (str): Command line argument for debugging port.
+		_profile_dir_command_line (str): Command line argument for profile directory.
+		_headless_mode_command_line (str): Command line argument for headless mode.
+		_mute_audio_command_line (str): Command line argument for mute audio.
+		_user_agent_command_line (str): Command line argument for user agent.
+		_proxy_server_command_line (str): Command line argument for proxy server.
+		start_page_url (str): Default start page URL.
+		debugging_port (Optional[int]): Current debugging port number.
+		profile_dir (Optional[str]): Current profile directory path.
+		headless_mode (Optional[bool]): Current headless mode status.
+		mute_audio (Optional[bool]): Current mute audio status.
+		user_agent (Optional[str]): Current user agent string.
+		proxy_server (Optional[str]): Current proxy server address.
 	"""
 	
 	def __init__(self, browser_exe: Union[str, pathlib.Path]):
 		"""
 		 Initializes ChromeStartArgs.
 
+		Configures command-line arguments for starting the Chrome browser, including
+		settings for remote debugging, user data directory, headless mode, and more.
+
 		 Args:
-		 	browser_exe (Union[str, pathlib.Path]): The name of the Chrome executable.
+			browser_exe (Union[str, pathlib.Path]): The path to the Chrome executable.
 		"""
+		
 		super().__init__(
 				browser_exe,
 				"--remote-debugging-port={value}",
@@ -120,61 +138,79 @@ class ChromeStartArgs(BrowserStartArgs):
 
 class ChromeWebDriver(BrowserWebDriver):
 	"""
-	Controls a local Chrome webdriver instance.
+	Manages a Chrome browser session using Selenium WebDriver.
 
-	This class extends `BrowserWebDriver` to provide specific control over a local Chrome browser instance using Selenium WebDriver.
-	It manages the creation, configuration, and lifecycle of a Chrome WebDriver, including options and start-up arguments.
+	This class specializes BrowserWebDriver for Google Chrome. It sets up and manages
+	the lifecycle of a Chrome browser instance controlled by Selenium WebDriver,
+	including starting the browser with specific options, handling sessions, and managing browser processes.
 
 	Attributes:
-		browser_exe (str): Path to the Chrome browser executable.
-		webdriver_path (str): Path to the ChromeDriver executable.
-		webdriver_start_args (ChromeStartArgs): Manages Chrome-specific browser start-up arguments.
-		webdriver_options_manager (ChromeOptionsManager): Manages Chrome-specific browser options.
-		window_rect (WindowRect): The browser window rectangle settings.
-		webdriver_is_active (bool): Indicates if the Chrome WebDriver is currently active.
-		base_implicitly_wait (int): Base implicit wait time in seconds.
-		base_page_load_timeout (int): Base page load timeout in seconds.
-		driver (webdriver.Chrome): Selenium Chrome WebDriver instance.
+		_window_rect (WindowRect): Initial window rectangle settings.
+		_js_scripts (dict[str, str]): Collection of JavaScript scripts for browser interaction.
+		_browser_exe (Union[str, pathlib.Path]): Path to the Chrome browser executable.
+		_webdriver_path (str): Path to the ChromeDriver executable.
+		_webdriver_start_args (ChromeStartArgs): Manages Chrome startup arguments.
+		_webdriver_options_manager (ChromeOptionsManager): Manages Chrome browser options.
+		driver (Optional[webdriver.Chrome]): Selenium Chrome WebDriver instance.
+		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
+		_base_page_load_timeout (int): Base page load timeout for page loading operations.
+		_is_active (bool): Indicates if the WebDriver instance is currently active.
+		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
 	"""
 	
 	def __init__(
 			self,
 			webdriver_path: str,
+			enable_devtools: bool,
 			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			hide_automation: bool = True,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
+			headless_mode: bool = False,
+			mute_audio: bool = False,
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: str = "https://www.google.com",
 	):
 		"""
-		Initializes ChromeWebDriver.
+		Initializes the ChromeWebDriver instance for managing Chrome Browser.
+
+		This constructor sets up the WebDriver specifically for Chrome Browser,
+		configuring browser and driver paths, and applying default or user-specified settings
+		for browser behavior like headless mode, proxy, and DevTools.
 
 		Args:
-			webdriver_path (str): Path to the chromedriver executable.
-			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Chrome browser executable. If None, it tries to find Chrome automatically. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for Chrome. Defaults to None.
-			profile_dir (Optional[str]): Path to the Chrome user profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to run Chrome in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in Chrome. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for Chrome. Defaults to None.
-			user_agent (Optional[str]): User agent string for Chrome. Defaults to None.
-			implicitly_wait (int): Implicit wait time in seconds for Selenium actions. Defaults to 5.
-			page_load_timeout (int): Page load timeout in seconds for page loading. Defaults to 5.
-			window_rect (Optional[WindowRect]): Window rectangle object to set initial window position and size. Defaults to None.
+			webdriver_path (str): Path to the ChromeDriver executable compatible with Chrome Browser.
+			enable_devtools (bool): Enables or disables the use of DevTools for this browser instance.
+			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Chrome Browser executable.
+				If None, the path is automatically detected. Defaults to None.
+			hide_automation (bool): Hides automation indicators in the browser if True. Defaults to True.
+			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
+			profile_dir (Optional[str]): Path to the browser profile directory to be used. Defaults to None.
+			headless_mode (bool): Runs Chrome Browser in headless mode if True. Defaults to False.
+			mute_audio (bool): Mutes audio output in Chrome Browser if True. Defaults to False.
+			proxy (Optional[Union[str, list[str]]]): Proxy settings for Chrome Browser.
+				Can be a single proxy string or a list of proxy strings. Defaults to None.
+			user_agent (Optional[str]): Custom user agent string for Chrome Browser. Defaults to None.
+			implicitly_wait (int): Base implicit wait time for WebDriver element searches in seconds. Defaults to 5.
+			page_load_timeout (int): Base page load timeout for WebDriver operations in seconds. Defaults to 5.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings for the browser window. Defaults to None.
+			start_page_url (str): URL to open when the browser starts. Defaults to "https://www.google.com".
 		"""
+		
 		if browser_exe is None:
 			browser_exe = get_path_to_browser("Google Chrome")
 		
 		super().__init__(
 				browser_exe=browser_exe,
 				webdriver_path=webdriver_path,
+				enable_devtools=enable_devtools,
 				webdriver_start_args=ChromeStartArgs,
 				webdriver_options_manager=ChromeOptionsManager,
+				hide_automation=hide_automation,
 				debugging_port=debugging_port,
 				profile_dir=profile_dir,
 				headless_mode=headless_mode,
@@ -184,42 +220,53 @@ class ChromeWebDriver(BrowserWebDriver):
 				implicitly_wait=implicitly_wait,
 				page_load_timeout=page_load_timeout,
 				window_rect=window_rect,
+				start_page_url=start_page_url,
 		)
 	
 	def create_driver(self):
 		"""
 		Creates the Chrome webdriver instance.
 
-		This method initializes and sets up the Selenium Chrome WebDriver with configured options and service.
-		It also sets the window position, size, implicit wait time, and page load timeout.
+		Initializes the Selenium ChromeDriver with configured options and service,
+		sets up window parameters, and applies default timeouts.
 		"""
-		webdriver_options = self.webdriver_options_manager.options
-		webdriver_service = Service(executable_path=self.webdriver_path)
+		
+		webdriver_options = self._webdriver_options_manager._options
+		webdriver_service = Service(executable_path=self._webdriver_path)
 		
 		self.driver = webdriver.Chrome(options=webdriver_options, service=webdriver_service)
 		
-		self.driver.set_window_position(x=self.window_rect.x, y=self.window_rect.y)
-		self.driver.set_window_size(width=self.window_rect.width, height=self.window_rect.height)
-		
-		self.driver.implicitly_wait(self.base_implicitly_wait)
-		self.driver.set_page_load_timeout(self.base_page_load_timeout)
+		self.set_window_rect(self._window_rect)
+		self.set_driver_timeouts(
+				page_load_timeout=self._base_page_load_timeout,
+				implicit_wait_timeout=self._base_implicitly_wait
+		)
 	
 	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
 		"""
 		Connects to an existing remote Chrome WebDriver session.
 
-		This method establishes a connection to a remote Selenium WebDriver server and reuses an existing browser session.
-		It allows you to control a browser instance that is already running remotely, given the command executor URL and session ID of that session.
+		Establishes a remote connection to an already running Chrome browser session,
+		allowing for session reuse and remote control.
 
 		Args:
 			command_executor (Union[str, RemoteConnection]): The URL of the remote WebDriver server or a `RemoteConnection` object.
 			session_id (str): The ID of the existing WebDriver session to connect to.
+
+		:Usage:
+			command_executor, session_id = driver.get_vars_for_remote()
+			new_driver = ChromeWebDriver(webdriver_path="path/to/chromedriver")
+			new_driver.remote_connect_driver(command_executor, session_id)
+			# Now new_driver controls the same browser session as driver
 		"""
+		
 		self.driver = webdriver.Remote(
 				command_executor=command_executor,
-				options=self.webdriver_options_manager.options
+				options=self._webdriver_options_manager._options
 		)
 		self.driver.session_id = session_id
 		
-		self.driver.implicitly_wait(self.base_implicitly_wait)
-		self.driver.set_page_load_timeout(self.base_page_load_timeout)
+		self.set_driver_timeouts(
+				page_load_timeout=self._base_page_load_timeout,
+				implicit_wait_timeout=self._base_implicitly_wait
+		)
