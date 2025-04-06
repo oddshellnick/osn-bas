@@ -139,8 +139,9 @@ class DevTools:
 		while True:
 			try:
 				event = await receiver_channel.receive()
-		
-				self._nursery_object.start_soon(self._handle_new_target, event.target_info.target_id)
+
+				if event.target_info.type_ == "page":
+					self._nursery_object.start_soon(self._handle_new_target, event.target_info.target_id)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):
