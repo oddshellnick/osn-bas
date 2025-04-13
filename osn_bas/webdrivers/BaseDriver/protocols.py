@@ -67,11 +67,11 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		...
 	
 	@property
-	async def current_url(self) -> str:
+	def current_url(self) -> str:
 		...
 	
 	@property
-	async def debugging_port(self) -> Optional[int]:
+	def debugging_port(self) -> Optional[int]:
 		...
 	
 	async def execute_js_script(self, script: str, *args) -> Any:
@@ -128,18 +128,18 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		...
 	
 	@property
-	async def html(self) -> str:
+	def html(self) -> str:
 		...
 	
 	@property
-	async def is_active(self) -> bool:
+	def is_active(self) -> bool:
 		...
 	
 	async def open_new_tab(self, link: str = "") -> None:
 		...
 	
 	@property
-	async def rect(self) -> WindowRect:
+	def rect(self) -> WindowRect:
 		...
 	
 	async def refresh_webdriver(self) -> None:
@@ -279,11 +279,11 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		...
 	
 	@property
-	async def window(self) -> str:
+	def window(self) -> str:
 		...
 	
 	@property
-	async def windows_names(self) -> list[str]:
+	def windows_names(self) -> list[str]:
 		...
 
 
