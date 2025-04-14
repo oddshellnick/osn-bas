@@ -1,6 +1,6 @@
 import pathlib
 from typing import Optional, Union
-from osn_bas.webdrivers.functions import (
+from osn_bas.webdrivers._functions import (
 	build_first_start_argument
 )
 

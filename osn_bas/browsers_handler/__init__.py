@@ -5,7 +5,7 @@ from osn_bas.browsers_handler.types import Browser
 from osn_bas.errors import (
 	PlatformNotSupportedError
 )
-from osn_bas.browsers_handler.windows import (
+from osn_bas.browsers_handler._windows import (
 	get_installed_browsers_win32
 )
 

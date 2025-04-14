@@ -72,8 +72,7 @@ driver.close_webdriver()
 
 ```python
 from osn_bas.webdrivers.Chrome import ChromeWebDriver
-from osn_bas.utilities import WindowRect
-
+from osn_bas.types import WindowRect
 driver = ChromeWebDriver(webdriver_path="path/to/chromedriver", enable_devtools=True)
 driver.start_webdriver(profile_dir="user_profile_dir", proxy="127.0.0.1:8080")
 

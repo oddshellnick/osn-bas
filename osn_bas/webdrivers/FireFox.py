@@ -1,7 +1,7 @@
 import pathlib
 from selenium import webdriver
 from typing import Optional, Union
-from osn_bas.utilities import WindowRect
+from osn_bas.types import WindowRect
 from osn_bas.webdrivers.types import WebdriverOption
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
