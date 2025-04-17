@@ -28,7 +28,8 @@
     *   Checking if an element is in the viewport (`check_element_in_viewport`).
     *   Generating random points within an element's visible area (`get_random_element_point_in_viewport`).
     *   Building and performing complex interactions using `ActionChains` (`build_action_chains`, `click_action`, `drag_and_drop_action`, `scroll_to_element_action`, `send_keys_action`, etc.).
-*   **Cross-Browser Support:** Supports multiple browser types (Chrome, Edge, Firefox, Yandex) with specific implementations (`ChromeWebDriver`, `EdgeWebDriver`, `FirefoxWebDriver`, `YandexWebDriver`).
+    *   **Simulating Human-Like Interactions:** Provides methods (`build_hm_move_action`, `build_hm_scroll_action`, `build_hm_text_input_action`, etc.) to create more natural mouse movements, scrolling, and typing sequences by breaking actions into smaller steps with pauses.
+* **Cross-Browser Support:** Supports multiple browser types (Chrome, Edge, Firefox, Yandex) with specific implementations (`ChromeWebDriver`, `EdgeWebDriver`, `FirefoxWebDriver`, `YandexWebDriver`).
 *   **Remote WebDriver Connection:** Allows connection to existing remote WebDriver sessions (`remote_connect_driver`) using the command executor and session ID (`get_vars_for_remote`).
 *   **Asynchronous Operations with Trio:** Includes `TrioBrowserWebDriverWrapper` to seamlessly integrate synchronous WebDriver operations into asynchronous `trio` applications using `trio.to_thread.run_sync`.
 *   **Powerful DevTools Integration (via Selenium BiDi & CDP):**
@@ -241,6 +242,7 @@ trio.run(test_devtools_interception,)
         *   Provides simplified methods for common Selenium actions (finding elements, navigation, actions, window management).
         *   Integrates JavaScript execution (`execute_js_script`, uses scripts from `js_scripts` folder).
         *   Manages timeouts (`set_driver_timeouts`, `update_times`).
+        *   Includes builders for human-like action sequences (`build_hm_move_action`, `build_hm_scroll_action`, `build_hm_text_input_action`, etc.).
         *   Handles remote connections (`get_vars_for_remote`, `remote_connect_driver` - implemented in subclasses).
         *   Initializes and holds the `DevTools` instance (`dev_tools`).
         *   Provides `to_wrapper()` to get the async wrapper.
