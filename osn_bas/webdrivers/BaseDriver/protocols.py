@@ -5,6 +5,7 @@ from selenium import webdriver
 from types import TracebackType
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
+from osn_bas.webdrivers.types import ActionPoint
 from selenium.webdriver.common.bidi.cdp import CdpSession
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.common.actions.key_input import KeyInput
@@ -85,6 +86,171 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		Returns:
 			ActionChains: A new ActionChains instance configured with the specified driver,
 				duration, and devices.
+		"""
+		
+		...
+	
+	async def build_hm_move_action(
+			self,
+			start_position: ActionPoint,
+			end_position: ActionPoint,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action sequence between two points.
+
+		Simulates a more natural mouse movement by breaking the path into smaller segments with pauses,
+		calculated by the external `move_to_parts` function. Adds the corresponding move-by-offset
+		actions and pauses to an ActionChains sequence. Assumes the starting point of the cursor
+		is implicitly handled or should be set prior to performing this chain.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (absolute or relative, depends on `move_to_parts` logic).
+			end_position (ActionPoint): The target coordinates for the mouse cursor.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total move time depends on `move_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like move sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	async def build_hm_move_to_element_action(
+			self,
+			start_position: ActionPoint,
+			element: WebElement,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action from a start point to a random point within a target element.
+
+		Determines a random target point within the element's bounding box (using `get_random_element_point`)
+		and then uses `build_hm_move_action` to create a human-like movement sequence to that point.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates for the mouse movement.
+			element (WebElement): The target element to move the mouse into.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like move-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	async def build_hm_scroll_action(
+			self,
+			delta_x: int,
+			delta_y: int,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action sequence by breaking the scroll into smaller parts with pauses.
+
+		This method simulates a more natural scroll compared to a direct jump. It calculates scroll segments
+		using an external `scroll_to_parts` function and adds corresponding scroll actions and pauses
+		to an ActionChains sequence. If no origin is provided, it defaults to scrolling from the
+		bottom-right corner for positive deltas and top-left for negative deltas of the viewport.
+
+		Args:
+			delta_x (int): The total horizontal distance to scroll. Positive scrolls right, negative scrolls left.
+			delta_y (int): The total vertical distance to scroll. Positive scrolls down, negative scrolls up.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll (viewport or element center).
+				If None, defaults to a viewport corner based on scroll direction. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. This duration is *not* directly the total scroll time,
+				which is determined by the sum of pauses from `scroll_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				to use if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like scroll sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	async def build_hm_scroll_to_element_action(
+			self,
+			element: WebElement,
+			additional_lower_y_offset: int = 0,
+			additional_upper_y_offset: int = 0,
+			additional_right_x_offset: int = 0,
+			additional_left_x_offset: int = 0,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action to bring an element into view with optional offsets.
+
+		Calculates the necessary scroll delta (dx, dy) to make the target element visible within the
+		viewport, considering additional offset margins. It then uses `build_hm_scroll_action`
+		to perform the scroll in a human-like manner.
+
+		Args:
+			element (WebElement): The target element to scroll into view.
+			additional_lower_y_offset (int): Extra space (in pixels) to leave below the element within the viewport. Defaults to 0.
+			additional_upper_y_offset (int): Extra space (in pixels) to leave above the element within the viewport. Defaults to 0.
+			additional_right_x_offset (int): Extra space (in pixels) to leave to the right of the element within the viewport. Defaults to 0.
+			additional_left_x_offset (int): Extra space (in pixels) to leave to the left of the element within the viewport. Defaults to 0.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll. Passed to `build_hm_scroll_action`. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Passed to `build_hm_scroll_action`. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like scroll-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	async def build_hm_text_input_action(
+			self,
+			text: str,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like text input action sequence.
+
+		Simulates typing by breaking the input text into smaller chunks with pauses between them,
+		calculated by the external `text_input_to_parts` function. Adds the corresponding
+		send_keys actions and pauses to an ActionChains sequence.
+
+		Args:
+			text (str): The text string to be typed.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total input time depends on `text_input_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like text input sequence added.
+						  Needs to be finalized with `.perform()`. Requires the target input element to have focus.
 		"""
 		
 		...
@@ -575,6 +741,25 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		
 		...
 	
+	async def get_random_element_point(self, element: WebElement) -> ActionPoint:
+		"""
+		Gets the coordinates of a random point within an element, relative to the viewport origin.
+
+		Calculates a random point within the visible portion of the element relative to the
+		element's own top-left corner. It then adds the element's top-left coordinates
+		(relative to the viewport) to get the final coordinates of the random point,
+		also relative to the viewport's top-left origin (0,0).
+
+		Args:
+			element (WebElement): The target element within which to find a random point.
+
+		Returns:
+			ActionPoint: An ActionPoint named tuple containing the 'x' and 'y' coordinates
+						 of the random point within the element, relative to the viewport origin.
+		"""
+		
+		...
+	
 	async def get_random_element_point_in_viewport(self, element: WebElement, step: int = 1) -> Optional[Position]:
 		"""
 		Calculates a random point within the visible portion of a given element in the viewport.
@@ -661,6 +846,7 @@ class TrioWebDriverWrapperProtocol(Protocol):
 
 		Args:
 			window (Optional[Union[str, int]]): The identifier for the desired window handle.
+
 				- str: Assumed to be the window handle itself.
 				- int: Index into the list of window handles (self.driver.window_handles).
 				- None: Get the handle of the currently focused window.
@@ -1855,6 +2041,171 @@ class BrowserWebDriverProtocol(Protocol):
 		
 		...
 	
+	def build_hm_move_action(
+			self,
+			start_position: ActionPoint,
+			end_position: ActionPoint,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action sequence between two points.
+
+		Simulates a more natural mouse movement by breaking the path into smaller segments with pauses,
+		calculated by the external `move_to_parts` function. Adds the corresponding move-by-offset
+		actions and pauses to an ActionChains sequence. Assumes the starting point of the cursor
+		is implicitly handled or should be set prior to performing this chain.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (absolute or relative, depends on `move_to_parts` logic).
+			end_position (ActionPoint): The target coordinates for the mouse cursor.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total move time depends on `move_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like move sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	def build_hm_move_to_element_action(
+			self,
+			start_position: ActionPoint,
+			element: WebElement,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action from a start point to a random point within a target element.
+
+		Determines a random target point within the element's bounding box (using `get_random_element_point`)
+		and then uses `build_hm_move_action` to create a human-like movement sequence to that point.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates for the mouse movement.
+			element (WebElement): The target element to move the mouse into.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like move-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	def build_hm_scroll_action(
+			self,
+			delta_x: int,
+			delta_y: int,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action sequence by breaking the scroll into smaller parts with pauses.
+
+		This method simulates a more natural scroll compared to a direct jump. It calculates scroll segments
+		using an external `scroll_to_parts` function and adds corresponding scroll actions and pauses
+		to an ActionChains sequence. If no origin is provided, it defaults to scrolling from the
+		bottom-right corner for positive deltas and top-left for negative deltas of the viewport.
+
+		Args:
+			delta_x (int): The total horizontal distance to scroll. Positive scrolls right, negative scrolls left.
+			delta_y (int): The total vertical distance to scroll. Positive scrolls down, negative scrolls up.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll (viewport or element center).
+				If None, defaults to a viewport corner based on scroll direction. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. This duration is *not* directly the total scroll time,
+				which is determined by the sum of pauses from `scroll_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				to use if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like scroll sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	def build_hm_scroll_to_element_action(
+			self,
+			element: WebElement,
+			additional_lower_y_offset: int = 0,
+			additional_upper_y_offset: int = 0,
+			additional_right_x_offset: int = 0,
+			additional_left_x_offset: int = 0,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action to bring an element into view with optional offsets.
+
+		Calculates the necessary scroll delta (dx, dy) to make the target element visible within the
+		viewport, considering additional offset margins. It then uses `build_hm_scroll_action`
+		to perform the scroll in a human-like manner.
+
+		Args:
+			element (WebElement): The target element to scroll into view.
+			additional_lower_y_offset (int): Extra space (in pixels) to leave below the element within the viewport. Defaults to 0.
+			additional_upper_y_offset (int): Extra space (in pixels) to leave above the element within the viewport. Defaults to 0.
+			additional_right_x_offset (int): Extra space (in pixels) to leave to the right of the element within the viewport. Defaults to 0.
+			additional_left_x_offset (int): Extra space (in pixels) to leave to the left of the element within the viewport. Defaults to 0.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll. Passed to `build_hm_scroll_action`. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Passed to `build_hm_scroll_action`. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like scroll-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		...
+	
+	def build_hm_text_input_action(
+			self,
+			text: str,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like text input action sequence.
+
+		Simulates typing by breaking the input text into smaller chunks with pauses between them,
+		calculated by the external `text_input_to_parts` function. Adds the corresponding
+		send_keys actions and pauses to an ActionChains sequence.
+
+		Args:
+			text (str): The text string to be typed.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total input time depends on `text_input_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like text input sequence added.
+						  Needs to be finalized with `.perform()`. Requires the target input element to have focus.
+		"""
+		
+		...
+	
 	def check_element_in_viewport(self, element: WebElement) -> bool:
 		"""
 		Checks if the specified web element is currently within the browser's viewport.
@@ -2272,6 +2623,25 @@ class BrowserWebDriverProtocol(Protocol):
 		
 		...
 	
+	def get_random_element_point(self, element: WebElement) -> ActionPoint:
+		"""
+		Gets the coordinates of a random point within an element, relative to the viewport origin.
+
+		Calculates a random point within the visible portion of the element relative to the
+		element's own top-left corner. It then adds the element's top-left coordinates
+		(relative to the viewport) to get the final coordinates of the random point,
+		also relative to the viewport's top-left origin (0,0).
+
+		Args:
+			element (WebElement): The target element within which to find a random point.
+
+		Returns:
+			ActionPoint: An ActionPoint named tuple containing the 'x' and 'y' coordinates
+						 of the random point within the element, relative to the viewport origin.
+		"""
+		
+		...
+	
 	def get_random_element_point_in_viewport(self, element: WebElement, step: int = 1) -> Optional[Position]:
 		"""
 		Calculates a random point within the visible portion of a given element in the viewport.
@@ -2358,6 +2728,7 @@ class BrowserWebDriverProtocol(Protocol):
 
 		Args:
 			window (Optional[Union[str, int]]): The identifier for the desired window handle.
+
 				- str: Assumed to be the window handle itself.
 				- int: Index into the list of window handles (self.driver.window_handles).
 				- None: Get the handle of the currently focused window.
@@ -2762,6 +3133,20 @@ class BrowserWebDriverProtocol(Protocol):
 			window (Optional[Union[str, int]]): The identifier of the window to switch to.
 				Can be a window handle (string) or an index (int) in the list of window handles.
 				If None, targets the current window handle.
+		"""
+		
+		...
+	
+	def to_wrapper(self) -> "TrioBrowserWebDriverWrapper":
+		"""
+		Creates a TrioBrowserWebDriverWrapper instance for asynchronous operations with Trio.
+
+		Wraps the BrowserWebDriver instance in a TrioBrowserWebDriverWrapper, which allows for running WebDriver
+		commands in a non-blocking manner within a Trio asynchronous context. This is essential for
+		integrating Selenium WebDriver with asynchronous frameworks like Trio.
+
+		Returns:
+			TrioBrowserWebDriverWrapper: A TrioBrowserWebDriverWrapper instance wrapping this BrowserWebDriver.
 		"""
 		
 		...

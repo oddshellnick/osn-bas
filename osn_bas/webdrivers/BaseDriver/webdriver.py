@@ -8,6 +8,7 @@ from selenium import webdriver
 from typing import Any, Optional, Union
 from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains
+from osn_bas.webdrivers.types import ActionPoint
 from selenium.webdriver.remote.webelement import WebElement
 from osn_windows_cmd.taskkill.parameters import TaskKillTypes
 from selenium.webdriver.common.actions.key_input import KeyInput
@@ -32,13 +33,16 @@ from selenium.webdriver.common.actions.wheel_input import (
 	ScrollOrigin,
 	WheelInput
 )
-from osn_bas.webdrivers._functions import (
-	find_browser_previous_session,
-	read_js_scripts
-)
 from osn_windows_cmd.netstat import (
 	get_localhost_minimum_free_port,
 	get_localhost_processes_with_pids
+)
+from osn_bas.webdrivers._functions import (
+	find_browser_previous_session,
+	move_to_parts,
+	read_js_scripts,
+	scroll_to_parts,
+	text_input_to_parts
 )
 
 
@@ -143,40 +147,6 @@ class BrowserWebDriver:
 				start_page_url=start_page_url,
 		)
 	
-	def execute_js_script(self, script: str, *args) -> Any:
-		"""
-		Executes a JavaScript script in the current browser context.
-
-		Executes arbitrary JavaScript code within the currently loaded webpage. This allows for
-		performing actions that are not directly supported by WebDriver commands, such as complex
-		DOM manipulations or accessing browser APIs.
-
-		Args:
-			script (str): The JavaScript code to execute as a string.
-			*args: Arguments to pass to the JavaScript script. These are accessible in the script as `arguments[0]`, `arguments[1]`, etc.
-
-		Returns:
-			Any: The result of the JavaScript execution. JavaScript return values are converted to Python types.
-				For example, JavaScript objects become Python dictionaries, arrays become lists, and primitives are converted directly.
-		"""
-		
-		return self.driver.execute_script(script, *args)
-	
-	def check_element_in_viewport(self, element: WebElement) -> bool:
-		"""
-		Checks if the specified web element is currently within the browser's viewport.
-
-		Executes a predefined JavaScript snippet to determine the visibility status.
-
-		Args:
-			element (WebElement): The Selenium WebElement to check.
-
-		Returns:
-			bool: True if the element is at least partially within the viewport, False otherwise.
-		"""
-		
-		return self.execute_js_script(self._js_scripts["check_element_in_viewport"], element)
-	
 	def build_action_chains(
 			self,
 			duration: int = 250,
@@ -201,6 +171,414 @@ class BrowserWebDriver:
 		"""
 		
 		return ActionChains(driver=self.driver, duration=duration, devices=devices)
+	
+	def build_hm_move_action(
+			self,
+			start_position: ActionPoint,
+			end_position: ActionPoint,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action sequence between two points.
+
+		Simulates a more natural mouse movement by breaking the path into smaller segments with pauses,
+		calculated by the external `move_to_parts` function. Adds the corresponding move-by-offset
+		actions and pauses to an ActionChains sequence. Assumes the starting point of the cursor
+		is implicitly handled or should be set prior to performing this chain.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (absolute or relative, depends on `move_to_parts` logic).
+			end_position (ActionPoint): The target coordinates for the mouse cursor.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total move time depends on `move_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like move sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		move_parts = move_to_parts(start_position=start_position, end_position=end_position)
+		
+		for part in move_parts:
+			action.pause(part.duration * 0.001)
+			action.move_by_offset(xoffset=part.offset.x, yoffset=part.offset.y)
+		
+		return action
+	
+	def execute_js_script(self, script: str, *args) -> Any:
+		"""
+		Executes a JavaScript script in the current browser context.
+
+		Executes arbitrary JavaScript code within the currently loaded webpage. This allows for
+		performing actions that are not directly supported by WebDriver commands, such as complex
+		DOM manipulations or accessing browser APIs.
+
+		Args:
+			script (str): The JavaScript code to execute as a string.
+			*args: Arguments to pass to the JavaScript script. These are accessible in the script as `arguments[0]`, `arguments[1]`, etc.
+
+		Returns:
+			Any: The result of the JavaScript execution. JavaScript return values are converted to Python types.
+				For example, JavaScript objects become Python dictionaries, arrays become lists, and primitives are converted directly.
+		"""
+		
+		return self.driver.execute_script(script, *args)
+	
+	def get_element_rect_in_viewport(self, element: WebElement) -> Rectangle:
+		"""
+		Gets the position and dimensions of an element relative to the viewport.
+
+		Executes a predefined JavaScript snippet that calculates the element's bounding rectangle
+		as seen in the current viewport.
+
+		Args:
+			element (WebElement): The Selenium WebElement whose rectangle is needed.
+
+		Returns:
+			Rectangle: A TypedDict containing the 'x', 'y', 'width', and 'height' of the element
+					   relative to the viewport's top-left corner. 'x' and 'y' can be negative
+					   if the element is partially scrolled out of view to the top or left.
+		"""
+		
+		rect = self.execute_js_script(self._js_scripts["get_element_rect_in_viewport"], element)
+		
+		return Rectangle(
+				x=int(rect["x"]),
+				y=int(rect["y"]),
+				width=int(rect["width"]),
+				height=int(rect["height"])
+		)
+	
+	def get_random_element_point_in_viewport(self, element: WebElement, step: int = 1) -> Optional[Position]:
+		"""
+		Calculates a random point within the visible portion of a given element in the viewport.
+
+		Executes a predefined JavaScript snippet that determines the element's bounding box
+		relative to the viewport, calculates the intersection of this box with the viewport,
+		and then selects a random point within that intersection, potentially aligned to a grid defined by `step`.
+
+		Args:
+			element (WebElement): The Selenium WebElement to find a random point within.
+			step (int): Defines the grid step for selecting the random point. The coordinates
+				will be multiples of this step within the valid range. Defaults to 1 (any pixel).
+
+		Returns:
+			Position: A TypedDict containing the integer 'x' and 'y' coordinates of a random point
+					  within the element's visible area in the viewport. Coordinates are relative
+					  to the element's top-left corner (0,0).
+		"""
+		
+		position = self.execute_js_script(self._js_scripts["get_random_element_point_in_viewport"], element, step)
+		
+		if position is not None:
+			return Position(x=int(position["x"]), y=int(position["y"]))
+		
+		return None
+	
+	def get_random_element_point(self, element: WebElement) -> ActionPoint:
+		"""
+		Gets the coordinates of a random point within an element, relative to the viewport origin.
+
+		Calculates a random point within the visible portion of the element relative to the
+		element's own top-left corner. It then adds the element's top-left coordinates
+		(relative to the viewport) to get the final coordinates of the random point,
+		also relative to the viewport's top-left origin (0,0).
+
+		Args:
+			element (WebElement): The target element within which to find a random point.
+
+		Returns:
+			ActionPoint: An ActionPoint named tuple containing the 'x' and 'y' coordinates
+						 of the random point within the element, relative to the viewport origin.
+		"""
+		
+		point_in_viewport = self.get_random_element_point_in_viewport(element=element, step=1)
+		element_viewport_pos = self.get_element_rect_in_viewport(element=element)
+		
+		x = int(element_viewport_pos["x"] + point_in_viewport["x"])
+		y = int(element_viewport_pos["y"] + point_in_viewport["y"])
+		
+		return ActionPoint(x=x, y=y)
+	
+	def build_hm_move_to_element_action(
+			self,
+			start_position: ActionPoint,
+			element: WebElement,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> tuple[ActionChains, ActionPoint]:
+		"""
+		Builds a human-like mouse move action from a start point to a random point within a target element.
+
+		Determines a random target point within the element's boundary relative to the viewport
+		(using `get_random_element_point`) and then uses `build_hm_move_action` to create
+		a human-like movement sequence to that point. Returns both the action chain and the
+		calculated end point.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (relative to viewport) for the mouse movement.
+			element (WebElement): The target element to move the mouse into.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+													If None, a new chain is created. Defaults to None.
+			duration (int): Base duration (in milliseconds) used when creating a new ActionChains
+							instance if `parent_action` is None. Total move time depends on the
+							`move_to_parts` calculation within `build_hm_move_action`. Defaults to 250.
+			devices (Optional[List[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+																				 to use if creating a new ActionChains
+																				 instance. Defaults to None.
+
+		Returns:
+			Tuple[ActionChains, ActionPoint]: A tuple containing:
+
+				- The ActionChains instance with the human-like move-to-element sequence added.
+				  Needs to be finalized with `.perform()`.
+				- The calculated end `ActionPoint` (relative to viewport) within the element that the
+				  mouse path targets.
+		"""
+		
+		end_position = self.get_random_element_point(element=element)
+		
+		return (
+				self.build_hm_move_action(
+						start_position=start_position,
+						end_position=end_position,
+						parent_action=parent_action,
+						duration=duration,
+						devices=devices
+				),
+				end_position
+		)
+	
+	def get_viewport_size(self) -> Size:
+		"""
+		Gets the current dimensions (width and height) of the browser's viewport.
+
+		Executes a predefined JavaScript snippet to retrieve the inner width and height
+		of the window.
+
+		Returns:
+			Size: A TypedDict containing the 'width' and 'height' of the viewport in pixels.
+		"""
+		
+		size = self.execute_js_script(self._js_scripts["get_viewport_size"])
+		
+		return Size(width=int(size["width"]), height=int(size["height"]))
+	
+	def build_hm_scroll_action(
+			self,
+			delta_x: int,
+			delta_y: int,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action sequence by breaking the scroll into smaller parts with pauses.
+
+		This method simulates a more natural scroll compared to a direct jump. It calculates scroll segments
+		using an external `scroll_to_parts` function and adds corresponding scroll actions and pauses
+		to an ActionChains sequence. If no origin is provided, it defaults to scrolling from the
+		bottom-right corner for positive deltas and top-left for negative deltas of the viewport.
+
+		Args:
+			delta_x (int): The total horizontal distance to scroll. Positive scrolls right, negative scrolls left.
+			delta_y (int): The total vertical distance to scroll. Positive scrolls down, negative scrolls up.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll (viewport or element center).
+				If None, defaults to a viewport corner based on scroll direction. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. This duration is *not* directly the total scroll time,
+				which is determined by the sum of pauses from `scroll_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				to use if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like scroll sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		if origin is None:
+			viewport_size = self.get_viewport_size()
+			origin_x = 0 if delta_x >= 0 else viewport_size["width"]
+			origin_y = 0 if delta_y >= 0 else viewport_size["height"]
+			origin = ScrollOrigin.from_viewport(origin_x, origin_y)
+		
+		start_position = ActionPoint(x=int(origin.x_offset), y=int(origin.y_offset))
+		end_position = ActionPoint(x=int(origin.x_offset) + delta_x, y=int(origin.y_offset) + delta_y)
+		
+		scroll_parts = scroll_to_parts(start_position=start_position, end_position=end_position)
+		
+		for part in scroll_parts:
+			action.pause(part.duration * 0.001)
+			action.scroll_from_origin(scroll_origin=origin, delta_x=int(part.delta.x), delta_y=int(part.delta.y))
+		
+		return action
+	
+	def get_viewport_rect(self) -> Rectangle:
+		"""
+		Gets the position and dimensions of the viewport relative to the document origin.
+
+		Combines the scroll position (top-left corner) and the viewport dimensions.
+		Executes a predefined JavaScript snippet.
+
+		Returns:
+			Rectangle: A TypedDict where 'x' and 'y' represent the current scroll offsets
+					   (window.pageXOffset, window.pageYOffset) and 'width' and 'height' represent
+					   the viewport dimensions (window.innerWidth, window.innerHeight).
+		"""
+		
+		rect = self.execute_js_script(self._js_scripts["get_viewport_rect"])
+		
+		return Rectangle(
+				x=int(rect["x"]),
+				y=int(rect["y"]),
+				width=int(rect["width"]),
+				height=int(rect["height"])
+		)
+	
+	def build_hm_scroll_to_element_action(
+			self,
+			element: WebElement,
+			additional_lower_y_offset: int = 0,
+			additional_upper_y_offset: int = 0,
+			additional_right_x_offset: int = 0,
+			additional_left_x_offset: int = 0,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action to bring an element into view with optional offsets.
+
+		Calculates the necessary scroll delta (dx, dy) to make the target element visible within the
+		viewport, considering additional offset margins. It then uses `build_hm_scroll_action`
+		to perform the scroll in a human-like manner.
+
+		Args:
+			element (WebElement): The target element to scroll into view.
+			additional_lower_y_offset (int): Extra space (in pixels) to leave below the element within the viewport. Defaults to 0.
+			additional_upper_y_offset (int): Extra space (in pixels) to leave above the element within the viewport. Defaults to 0.
+			additional_right_x_offset (int): Extra space (in pixels) to leave to the right of the element within the viewport. Defaults to 0.
+			additional_left_x_offset (int): Extra space (in pixels) to leave to the left of the element within the viewport. Defaults to 0.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll. Passed to `build_hm_scroll_action`. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Passed to `build_hm_scroll_action`. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like scroll-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		viewport_rect = self.get_viewport_rect()
+		element_rect = self.get_element_rect_in_viewport(element)
+		
+		if element_rect["x"] < additional_left_x_offset:
+			delta_x = int(element_rect["x"] - additional_left_x_offset)
+		elif element_rect["x"] + element_rect["width"] > viewport_rect["width"] - additional_right_x_offset:
+			delta_x = int(
+					element_rect["x"] +
+					element_rect["width"] -
+					(viewport_rect["width"] - additional_right_x_offset)
+			)
+		else:
+			delta_x = 0
+		
+		if element_rect["y"] < additional_upper_y_offset:
+			delta_y = int(element_rect["y"] - additional_upper_y_offset)
+		elif element_rect["y"] + element_rect["height"] > viewport_rect["height"] - additional_lower_y_offset:
+			delta_y = int(
+					element_rect["y"] +
+					element_rect["height"] -
+					(viewport_rect["height"] - additional_lower_y_offset)
+			)
+		else:
+			delta_y = 0
+		
+		return self.build_hm_scroll_action(
+				delta_x=delta_x,
+				delta_y=delta_y,
+				origin=origin,
+				parent_action=parent_action,
+				duration=duration,
+				devices=devices
+		)
+	
+	def build_hm_text_input_action(
+			self,
+			text: str,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like text input action sequence.
+
+		Simulates typing by breaking the input text into smaller chunks with pauses between them,
+		calculated by the external `text_input_to_parts` function. Adds the corresponding
+		send_keys actions and pauses to an ActionChains sequence.
+
+		Args:
+			text (str): The text string to be typed.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total input time depends on `text_input_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like text input sequence added.
+						  Needs to be finalized with `.perform()`. Requires the target input element to have focus.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		input_parts = text_input_to_parts(text)
+		
+		for part in input_parts:
+			action.pause(part.duration * 0.001)
+			action.send_keys(part.text)
+		
+		return action
+	
+	def check_element_in_viewport(self, element: WebElement) -> bool:
+		"""
+		Checks if the specified web element is currently within the browser's viewport.
+
+		Executes a predefined JavaScript snippet to determine the visibility status.
+
+		Args:
+			element (WebElement): The Selenium WebElement to check.
+
+		Returns:
+			bool: True if the element is at least partially within the viewport, False otherwise.
+		"""
+		
+		return self.execute_js_script(self._js_scripts["check_element_in_viewport"], element)
 	
 	def click_action(
 			self,
@@ -292,6 +670,7 @@ class BrowserWebDriver:
 
 		Args:
 			window (Optional[Union[str, int]]): The identifier for the desired window handle.
+
 				- str: Assumed to be the window handle itself.
 				- int: Index into the list of window handles (self.driver.window_handles).
 				- None: Get the handle of the currently focused window.
@@ -746,57 +1125,6 @@ class BrowserWebDriver:
 		
 		return self.execute_js_script(self._js_scripts["get_element_css"], element)
 	
-	def get_element_rect_in_viewport(self, element: WebElement) -> Rectangle:
-		"""
-		Gets the position and dimensions of an element relative to the viewport.
-
-		Executes a predefined JavaScript snippet that calculates the element's bounding rectangle
-		as seen in the current viewport.
-
-		Args:
-			element (WebElement): The Selenium WebElement whose rectangle is needed.
-
-		Returns:
-			Rectangle: A TypedDict containing the 'x', 'y', 'width', and 'height' of the element
-					   relative to the viewport's top-left corner. 'x' and 'y' can be negative
-					   if the element is partially scrolled out of view to the top or left.
-		"""
-		
-		rect = self.execute_js_script(self._js_scripts["get_element_rect_in_viewport"], element)
-		
-		return Rectangle(
-				x=int(rect["x"]),
-				y=int(rect["y"]),
-				width=int(rect["width"]),
-				height=int(rect["height"])
-		)
-	
-	def get_random_element_point_in_viewport(self, element: WebElement, step: int = 1) -> Optional[Position]:
-		"""
-		Calculates a random point within the visible portion of a given element in the viewport.
-
-		Executes a predefined JavaScript snippet that determines the element's bounding box
-		relative to the viewport, calculates the intersection of this box with the viewport,
-		and then selects a random point within that intersection, potentially aligned to a grid defined by `step`.
-
-		Args:
-			element (WebElement): The Selenium WebElement to find a random point within.
-			step (int): Defines the grid step for selecting the random point. The coordinates
-				will be multiples of this step within the valid range. Defaults to 1 (any pixel).
-
-		Returns:
-			Position: A TypedDict containing the integer 'x' and 'y' coordinates of a random point
-					  within the element's visible area in the viewport. Coordinates are relative
-					  to the element's top-left corner (0,0).
-		"""
-		
-		position = self.execute_js_script(self._js_scripts["get_random_element_point_in_viewport"], element, step)
-		
-		if position is not None:
-			return Position(x=int(position["x"]), y=int(position["y"]))
-		
-		return None
-	
 	def get_vars_for_remote(self) -> tuple[RemoteConnection, str]:
 		"""
 		Gets variables necessary to create a remote WebDriver instance.
@@ -825,43 +1153,6 @@ class BrowserWebDriver:
 		position = self.execute_js_script(self._js_scripts["get_viewport_position"])
 		
 		return Position(x=int(position["x"]), y=int(position["y"]))
-	
-	def get_viewport_rect(self) -> Rectangle:
-		"""
-		Gets the position and dimensions of the viewport relative to the document origin.
-
-		Combines the scroll position (top-left corner) and the viewport dimensions.
-		Executes a predefined JavaScript snippet.
-
-		Returns:
-			Rectangle: A TypedDict where 'x' and 'y' represent the current scroll offsets
-					   (window.pageXOffset, window.pageYOffset) and 'width' and 'height' represent
-					   the viewport dimensions (window.innerWidth, window.innerHeight).
-		"""
-		
-		rect = self.execute_js_script(self._js_scripts["get_viewport_rect"])
-		
-		return Rectangle(
-				x=int(rect["x"]),
-				y=int(rect["y"]),
-				width=int(rect["width"]),
-				height=int(rect["height"])
-		)
-	
-	def get_viewport_size(self) -> Size:
-		"""
-		Gets the current dimensions (width and height) of the browser's viewport.
-
-		Executes a predefined JavaScript snippet to retrieve the inner width and height
-		of the window.
-
-		Returns:
-			Size: A TypedDict containing the 'width' and 'height' of the viewport in pixels.
-		"""
-		
-		size = self.execute_js_script(self._js_scripts["get_viewport_size"])
-		
-		return Size(width=int(size["width"]), height=int(size["height"]))
 	
 	@property
 	def html(self) -> str:
@@ -1814,7 +2105,7 @@ class BrowserWebDriver:
 		
 		self.driver.switch_to.frame(frame)
 	
-	def to_wrapper(self):
+	def to_wrapper(self) -> "TrioBrowserWebDriverWrapper":
 		"""
 		Creates a TrioBrowserWebDriverWrapper instance for asynchronous operations with Trio.
 
