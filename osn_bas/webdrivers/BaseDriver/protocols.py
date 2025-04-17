@@ -1,3 +1,4 @@
+import math
 import trio
 import pathlib
 from selenium import webdriver
@@ -57,9 +58,10 @@ class TrioWebDriverWrapperProtocol(Protocol):
 	Protocol defining the asynchronous interface for TrioBrowserWebDriverWrapper.
 	"""
 	
-	driver: "BrowserWebDriver"
+	_webdriver: "BrowserWebDriver"
+	_excluding_functions: list[str]
 	
-	def __init__(self, driver: "BrowserWebDriver"):
+	def __init__(self, _webdriver: "BrowserWebDriver"):
 		...
 	
 	async def build_action_chains(
@@ -919,6 +921,7 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
+			trio_tokens_limits: Union[int, math.inf] = 40,
 	):
 		"""
 		Resets all configurable browser settings to their default or specified values.
@@ -926,7 +929,7 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		This method resets various browser settings to the provided values. If no value
 		is provided for certain settings, they are reset to their default states.
 		This includes DevTools, automation hiding, debugging port, profile directory,
-		proxy, audio muting, headless mode, user agent, and window rectangle.
+		proxy, audio muting, headless mode, user agent, window rectangle, and Trio token limits.
 
 		Args:
 			enable_devtools (bool): Enables or disables DevTools integration.
@@ -935,10 +938,11 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
 			headless_mode (bool): Enables or disables headless mode. Defaults to False.
 			mute_audio (bool): Mutes or unmutes audio output in the browser. Defaults to False.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
+			proxy (Optional[Union[str, Sequence[str]]]): Configures proxy settings for the browser. Defaults to None.
 			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to a new WindowRect().
 			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			trio_tokens_limits (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
 		"""
 		
 		...
@@ -954,24 +958,27 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Restarts the WebDriver and browser session.
+		Restarts the WebDriver and browser session gracefully.
 
-		Performs a complete restart of the WebDriver and browser. It first closes the existing WebDriver
-		and browser session using `close_webdriver`, and then starts a new session using `start_webdriver`
-		with the provided or current settings. This is useful for resetting the browser state between tests or operations.
+		Performs a clean restart by first closing the existing WebDriver session and browser
+		(using `close_webdriver`), and then initiating a new session (using `start_webdriver`)
+		with potentially updated settings. If settings arguments are provided, they override
+		the existing settings for the new session; otherwise, the current settings are used.
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration for the new session. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the new browser session. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory for the new session. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the new browser session in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the new browser session. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for the new session. Defaults to None.
-			user_agent (Optional[str]): User agent string to use for the new session. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings for the new session. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for the new session. Defaults to None (use current).
+			debugging_port (Optional[int]): Override debugging port for the new session. Defaults to None (use current).
+			profile_dir (Optional[str]): Override profile directory for the new session. Defaults to None (use current).
+			headless_mode (Optional[bool]): Override headless mode for the new session. Defaults to None (use current).
+			mute_audio (Optional[bool]): Override audio muting for the new session. Defaults to None (use current).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for the new session. Defaults to None (use current).
+			user_agent (Optional[str]): Override user agent for the new session. Defaults to None (use current).
+			window_rect (Optional[WindowRect]): Override window rectangle for the new session. Defaults to None (use current).
+			start_page_url (Optional[str]): Override start page URL for the new session. Defaults to None (use current).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
 		"""
 		
 		...
@@ -1278,6 +1285,16 @@ class TrioWebDriverWrapperProtocol(Protocol):
 		
 		...
 	
+	async def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, math.inf]):
+		"""
+		Updates the total number of tokens for the Trio capacity limiter.
+
+		Args:
+			trio_tokens_limit (Union[int, float]): The new total token limit. Use math.inf for unlimited.
+		"""
+		
+		...
+	
 	async def set_user_agent(self, user_agent: Optional[str]):
 		"""
 		Sets the user agent.
@@ -1315,24 +1332,27 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Starts the WebDriver and browser session.
+		Starts the WebDriver service and the browser session.
 
 		Initializes and starts the WebDriver instance and the associated browser process.
-		It first updates settings based on provided parameters, checks if a WebDriver instance is already active,
-		and if not, starts the WebDriver service and then creates a new browser session.
+		It first updates settings based on provided parameters (if the driver is not already running),
+		checks if a WebDriver service process needs to be started, starts it if necessary using Popen,
+		waits for it to become active, and then creates the WebDriver client instance (`self.driver`).
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for this start. Defaults to None (use current setting).
+			debugging_port (Optional[int]): Override debugging port for this start. Defaults to None (use current setting).
+			profile_dir (Optional[str]): Override profile directory for this start. Defaults to None (use current setting).
+			headless_mode (Optional[bool]): Override headless mode for this start. Defaults to None (use current setting).
+			mute_audio (Optional[bool]): Override audio muting for this start. Defaults to None (use current setting).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for this start. Defaults to None (use current setting).
+			user_agent (Optional[str]): Override user agent for this start. Defaults to None (use current setting).
+			window_rect (Optional[WindowRect]): Override window rectangle for this start. Defaults to None (use current setting).
+			start_page_url (Optional[str]): Override start page URL for this start. Defaults to None (use current setting).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
 		"""
 		
 		...
@@ -1389,25 +1409,30 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Updates various browser settings after initialization.
+		Updates various browser settings after initialization or selectively.
 
-		This method allows for dynamic updating of browser settings such as
-		DevTools enablement, automation hiding, debugging port, profile directory,
-		headless mode, audio muting, proxy configuration, user agent string, and window rectangle.
+		This method allows for dynamic updating of browser settings. Only the settings
+		provided (not None) will be updated.
 
 		Args:
-			enable_devtools (Optional[bool]): Enables or disables DevTools integration. Defaults to None.
-			hide_automation (Optional[bool]): Sets whether to hide browser automation indicators. Defaults to None.
-			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Enables or disables headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Mutes or unmutes audio output in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
-			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Enable/disable DevTools integration. Defaults to None (no change).
+			hide_automation (Optional[bool]): Set whether to hide browser automation indicators. Defaults to None (no change).
+			debugging_port (Optional[int]): Specify a debugging port. Defaults to None (no change initially, but see note below).
+			profile_dir (Optional[str]): Set the browser profile directory. Defaults to None (no change).
+			headless_mode (Optional[bool]): Enable/disable headless mode. Defaults to None (no change).
+			mute_audio (Optional[bool]): Mute/unmute audio output. Defaults to None (no change).
+			proxy (Optional[Union[str, Sequence[str]]]): Configure proxy settings. Defaults to None (no change).
+			user_agent (Optional[str]): Set a custom user agent string. Defaults to None (no change).
+			window_rect (Optional[WindowRect]): Update the window rectangle settings. Defaults to None (no change).
+			start_page_url (Optional[str]): Set the start page URL. Defaults to None (no change).
+			trio_tokens_limits (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
+
+		Note:
+			The debugging port is ultimately determined by `find_debugging_port`, which might use
+			the provided `debugging_port` and `profile_dir` values.
 		"""
 		
 		...
@@ -1463,6 +1488,29 @@ class DevToolsProtocol(Protocol):
 	_callbacks_settings: CallbacksSettings
 	
 	async def __aenter__(self) -> TrioWebDriverWrapperProtocol:
+		"""
+		Asynchronously enters the DevTools event handling context.
+
+		This method is called when entering an `async with` block with a DevTools instance.
+		It initializes the BiDi connection, starts a Trio nursery to manage event listeners,
+		and then starts listening for DevTools events.
+
+		Returns:
+			TrioWebDriverWrapperProtocol: Returns a wrapped WebDriver object that can be used to interact with the browser
+				 while DevTools event handling is active.
+
+		Raises:
+			CantEnterDevToolsContextError: If the WebDriver driver is not initialized, indicating that a browser session has not been started yet.
+
+		Usage
+		______
+		async with driver.dev_tools as driver_wrapper:
+			# DevTools event handling is active within this block
+			await driver_wrapper.set_request_paused_handler(...)
+			await driver.search_url("example.com")
+		# DevTools event handling is deactivated after exiting the block
+		"""
+		
 		...
 	
 	async def __aexit__(
@@ -1471,12 +1519,38 @@ class DevToolsProtocol(Protocol):
 			exc_val: Optional[BaseException],
 			exc_tb: Optional[TracebackType]
 	) -> None:
+		"""
+		Asynchronously exits the DevTools event handling context.
+
+		This method is called when exiting an `async with` block with a DevTools instance.
+		It ensures that all event listeners are cancelled, the Trio nursery is closed,
+		and the BiDi connection is properly shut down.
+
+		Args:
+			exc_type (Optional[type]): The exception type, if any, that caused the context to be exited.
+			exc_val (Optional[BaseException]): The exception value, if any.
+			exc_tb (Optional[traceback.TracebackType]): The exception traceback, if any.
+		"""
+		
 		...
 	
 	def __init__(self, parent_webdriver: "BrowserWebDriver"):
 		...
 	
 	def _get_devtools_object(self, path: str) -> Any:
+		"""
+		Navigates and retrieves a specific object within the DevTools API structure.
+
+		Using a dot-separated path, this method traverses the nested DevTools API objects to retrieve a target object.
+		For example, a path like "fetch.enable" would access `self._bidi_devtools.fetch.enable`.
+
+		Args:
+			path (str): A dot-separated string representing the path to the desired DevTools API object.
+
+		Returns:
+			Any: The DevTools API object located at the specified path.
+		"""
+		
 		...
 	
 	def _get_handler_to_use(self, event_type: str, event_name: str) -> Optional[
@@ -1485,6 +1559,20 @@ class DevToolsProtocol(Protocol):
 			Coroutine[None, None, Any]
 		]
 	]:
+		"""
+		Retrieves the appropriate handler function for a given DevTools event.
+
+		Based on the event type and name, this method returns the corresponding handler function
+		defined within the DevTools class. It's used to dynamically dispatch events to their respective handlers.
+
+		Args:
+			event_type (str): The type of DevTools event (e.g., "fetch").
+			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
+
+		Returns:
+			Optional[Callable[[CdpSession, fetch.RequestPausedHandlerSettings, Any], Coroutine[None, None, Any]]]: The handler function if found, otherwise None.
+		"""
+		
 		...
 	
 	async def _handle_fetch_request_paused(
@@ -1493,22 +1581,91 @@ class DevToolsProtocol(Protocol):
 			handler_settings: fetch.RequestPausedHandlerSettings,
 			event: Any
 	) -> None:
+		"""
+		Handles the 'fetch.requestPaused' event from CDP.
+
+		This method is invoked when the DevTools detects a paused network request that matches the configured fetch criteria.
+		It processes the request based on the provided handler settings, which may include modifying headers or post data before continuing the request.
+
+		Args:
+			cdp_session (CdpSession): The CDP session object used to communicate with the browser's DevTools.
+			handler_settings (fetch.RequestPausedHandlerSettings): Configuration settings for handling the 'requestPaused' event,
+				including handlers for post data and headers modification.
+			event (Any): The 'fetch.requestPaused' event object containing details about the paused request.
+		"""
+		
 		...
 	
 	async def _handle_new_target(self, target_id: str) -> None:
+		"""
+		Handles events for a newly created browser target.
+
+		Manages a new CDP session for a given target ID. It uses `_new_session_manager` to open a session for the target,
+		starts event listeners for this new session, and waits for a cancellation event before closing the session.
+
+		Args:
+			target_id (str): The ID of the new browser target to handle.
+		"""
+		
 		...
 	
 	@asynccontextmanager
 	async def _new_session_manager(self, target_id: str) -> AsyncGenerator[CdpSession, None]:
+		"""
+		Manages a new CDP session for a specific target, using async context management.
+
+		This context manager opens a new CDP session for a given target ID and ensures that the session is properly closed after use.
+		It's used to handle the lifecycle of CDP sessions for different browser targets.
+
+		Args:
+			target_id (str): The ID of the browser target for which to open a new CDP session.
+
+		Returns:
+			AsyncGenerator[CdpSession, None]: An asynchronous generator that yields a CdpSession object, allowing for operations within the session context.
+		"""
+		
 		...
 	
 	async def _process_new_targets(self, cdp_session: CdpSession) -> None:
+		"""
+		Processes new browser targets as they are created.
+
+		Listens for 'target.TargetCreated' events, which are emitted when new targets (like tabs or windows) are created in the browser.
+		For each new target, it starts a new nursery task to handle events for that target.
+
+		Args:
+			cdp_session (CdpSession): The CDP session object to listen for target creation events.
+		"""
+		
 		...
 	
 	def _remove_handler_settings(self, event_type: str, event_name: str) -> None:
+		"""
+		Removes specific handler settings for a given DevTools event.
+
+		This method is used internally to clean up configurations when a handler is no longer needed.
+		It sets the handler settings for a specific event name under an event type to None and updates the 'use' flag for that event type.
+
+		Args:
+			event_type (str): The type of DevTools event domain (e.g., "fetch").
+			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
+		"""
+		
 		...
 	
 	async def _run_event_listener(self, cdp_session: CdpSession, event_type: str, event_name: str) -> None:
+		"""
+		Runs an event listener for a specific DevTools event.
+
+		This method sets up and runs a listener for a particular DevTools event. It retrieves handler settings,
+		gets the handler function, and then enters a loop to receive and process events as they occur, handling potential exceptions.
+
+		Args:
+			cdp_session (CdpSession): The CDP session object to use for listening to events.
+			event_type (str): The type of DevTools event domain (e.g., "fetch").
+			event_name (str): The name of the specific event to listen for (e.g., "request_paused").
+		"""
+		
 		...
 	
 	def _set_handler_settings(
@@ -1518,20 +1675,71 @@ class DevToolsProtocol(Protocol):
 			settings_type: type,
 			**kwargs: Any
 	) -> None:
+		"""
+		Sets handler settings for a specific DevTools event.
+
+		This internal method configures the settings for handling a specific DevTools event. It updates the `_callbacks_settings`
+		with the provided settings, including the settings type and any keyword arguments, and marks the event type as 'in use'.
+
+		Args:
+			event_type (str): The type of DevTools event domain (e.g., "fetch").
+			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
+			settings_type (type): The class type for the settings object, used for instantiation.
+			**kwargs (Any): Keyword arguments to be passed to the settings_type constructor.
+		"""
+		
 		...
 	
 	async def _start_listeners(self, cdp_session: CdpSession) -> None:
+		"""
+		Starts all configured DevTools event listeners.
+
+		This method initiates listeners for all event types configured in `_callbacks_settings` that are set to 'use'.
+		It enables target discovery and starts a nursery task to process new targets, then iterates through each event type and name to start individual listeners.
+
+		Args:
+			cdp_session (CdpSession): The CDP session object to use for starting listeners.
+
+		Raises:
+			WrongHandlerSettingsTypeError: If the handler_settings is not a dictionary.
+			WrongHandlerSettingsError: If the handler_settings does not contain exactly one of the required keys.
+		"""
+		
 		...
 	
 	@property
 	def _websocket_url(self) -> Optional[str]:
+		"""
+		Retrieves the WebSocket URL for DevTools from the WebDriver.
+
+		This method attempts to get the WebSocket URL from the WebDriver capabilities or by directly querying the CDP details.
+		The WebSocket URL is necessary to establish a connection to the browser's DevTools.
+
+		Returns:
+			Optional[str]: The WebSocket URL for DevTools, or None if it cannot be retrieved.
+		"""
+		
 		...
 	
 	@property
 	def is_active(self) -> bool:
+		"""
+		Checks if DevTools is currently active.
+
+		Returns:
+			bool: True if DevTools event handler context manager is active, False otherwise.
+		"""
+		
 		...
 	
 	def remove_request_paused_handler_settings(self) -> None:
+		"""
+		Removes the settings for the request paused handler specifically for fetch events.
+
+		This method disables the interception and modification of network requests that were set up using `set_request_paused_handler`.
+		It calls `_remove_handler_settings` specifically for the 'fetch' event type and 'request_paused' event name.
+		"""
+		
 		...
 	
 	def set_request_paused_handler(
@@ -1541,6 +1749,42 @@ class DevToolsProtocol(Protocol):
 			post_data_handler: Optional[Callable[[fetch.RequestPausedHandlerSettings, Any], Optional[str]]] = None,
 			headers_handler: Optional[Callable[[fetch.RequestPausedHandlerSettings, Any], Optional[Mapping]]] = None
 	) -> None:
+		"""
+		Sets up a handler for 'fetch.requestPaused' events to modify network requests.
+
+		Configures DevTools to intercept network requests and pause them when they match certain criteria.
+		This allows for dynamic modification of request post data and headers before the request is continued.
+		It uses handler settings to define how requests are modified and processed.
+
+		Args:
+			post_data_instances (Optional[Any]): Instances to match against request post data for interception. Defaults to None.
+			headers_instances (Optional[dict[str, fetch.HeaderInstance]]): dictionary of header instances to modify.
+				Keys are header names, and values are HeaderInstance objects defining the modification. Defaults to None.
+			post_data_handler (Optional[fetch.post_data_handler_type]):
+				Custom handler function for processing and modifying request post data. If None, a default handler is used. Defaults to None.
+			headers_handler (Optional[fetch.headers_handler_type]):
+				Custom handler function for processing and modifying request headers. If None, a default handler is used. Defaults to None.
+
+		Usage
+		______
+		from osn_bas.webdrivers.BaseDriver.dev_tools.fetch import HeaderInstance
+
+		async def modify_headers(handler_settings, event):
+			# Custom header modification logic
+			return fetch.default_headers_handler(handler_settings, fetch.HeaderEntry, event)
+
+		headers_to_set = {
+			"Custom-Header": HeaderInstance(value="custom_value", instruction="set")
+		}
+
+		async with driver.dev_tools as dev_tools:
+			driver.dev_tools.set_request_paused_handler(
+				headers_instances=headers_to_set,
+				headers_handler=modify_headers
+			)
+			await driver.search_url("example.com")
+		"""
+		
 		...
 
 
@@ -1561,6 +1805,7 @@ class BrowserWebDriverProtocol(Protocol):
 	_base_page_load_timeout: int
 	_is_active: bool
 	_enable_devtools: bool
+	trio_capacity_limiter: trio.CapacityLimiter
 	dev_tools: "DevTools"
 	
 	def __init__(
@@ -1570,15 +1815,18 @@ class BrowserWebDriverProtocol(Protocol):
 			enable_devtools: bool,
 			webdriver_start_args: type,
 			webdriver_options_manager: type,
+			hide_automation: bool = False,
 			debugging_port: Optional[int] = None,
 			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
+			headless_mode: bool = False,
+			mute_audio: bool = False,
 			proxy: Optional[Union[str, list[str]]] = None,
 			user_agent: Optional[str] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
+			start_page_url: str = "",
+			trio_tokens_limit: Union[int, math.inf] = 40,
 	):
 		...
 	
@@ -2127,6 +2375,7 @@ class BrowserWebDriverProtocol(Protocol):
 		This method configures the browser
 		"""
 		
+		...
 	
 	@property
 	def html(self) -> str:
@@ -2474,6 +2723,16 @@ class BrowserWebDriverProtocol(Protocol):
 
 		Args:
 			start_page_url (str): The absolute URL for the browser to load initially.
+		"""
+		
+		...
+	
+	def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, math.inf]):
+		"""
+		Updates the total number of tokens for the Trio capacity limiter.
+
+		Args:
+			trio_tokens_limit (Union[int, float]): The new total token limit. Use math.inf for unlimited.
 		"""
 		
 		...

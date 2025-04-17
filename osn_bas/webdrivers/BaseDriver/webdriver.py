@@ -1,7 +1,9 @@
+import math
 import trio
 import pathlib
 from random import random
 from subprocess import Popen
+from functools import partial
 from selenium import webdriver
 from typing import Any, Optional, Union
 from selenium.webdriver.common.by import By
@@ -61,6 +63,7 @@ class BrowserWebDriver:
 		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
 		_base_page_load_timeout (int): Base page load timeout for page loading operations.
 		_is_active (bool): Indicates if the WebDriver instance is currently active.
+		trio_capacity_limiter (trio.CapacityLimiter): Trio capacity limiter for controlling concurrent operations.
 		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
 	"""
 	
@@ -82,6 +85,7 @@ class BrowserWebDriver:
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
+			trio_tokens_limit: Union[int, math.inf] = 40,
 	):
 		"""
 		Initializes the BrowserWebDriver instance.
@@ -106,6 +110,7 @@ class BrowserWebDriver:
 			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5 seconds.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to a default WindowRect instance if None.
 			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Use math.inf for unlimited. Defaults to 40.
 		"""
 		
 		if window_rect is None:
@@ -123,6 +128,7 @@ class BrowserWebDriver:
 		self._base_implicitly_wait = implicitly_wait
 		self._base_page_load_timeout = page_load_timeout
 		self._is_active = False
+		self.trio_capacity_limiter = trio.CapacityLimiter(trio_tokens_limit)
 		self.dev_tools = DevTools(self)
 		
 		self.update_settings(
@@ -788,7 +794,7 @@ class BrowserWebDriver:
 		
 		if position is not None:
 			return Position(x=int(position["x"]), y=int(position["y"]))
-
+		
 		return None
 	
 	def get_vars_for_remote(self) -> tuple[RemoteConnection, str]:
@@ -1117,6 +1123,16 @@ class BrowserWebDriver:
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
+	def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, math.inf]):
+		"""
+		Updates the total number of tokens for the Trio capacity limiter.
+
+		Args:
+			trio_tokens_limit (Union[int, float]): The new total token limit. Use math.inf for unlimited.
+		"""
+		
+		self.trio_capacity_limiter.total_tokens = trio_tokens_limit
+	
 	def set_start_page_url(self, start_page_url: str):
 		"""
 		Sets the URL that the WebDriver will navigate to upon starting.
@@ -1251,6 +1267,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
+			trio_tokens_limits: Union[int, math.inf] = 40,
 	):
 		"""
 		Resets all configurable browser settings to their default or specified values.
@@ -1258,7 +1275,7 @@ class BrowserWebDriver:
 		This method resets various browser settings to the provided values. If no value
 		is provided for certain settings, they are reset to their default states.
 		This includes DevTools, automation hiding, debugging port, profile directory,
-		proxy, audio muting, headless mode, user agent, and window rectangle.
+		proxy, audio muting, headless mode, user agent, window rectangle, and Trio token limits.
 
 		Args:
 			enable_devtools (bool): Enables or disables DevTools integration.
@@ -1267,10 +1284,11 @@ class BrowserWebDriver:
 			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
 			headless_mode (bool): Enables or disables headless mode. Defaults to False.
 			mute_audio (bool): Mutes or unmutes audio output in the browser. Defaults to False.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
+			proxy (Optional[Union[str, Sequence[str]]]): Configures proxy settings for the browser. Defaults to None.
 			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to a new WindowRect().
 			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			trio_tokens_limits (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
 		"""
 		
 		if window_rect is None:
@@ -1285,6 +1303,7 @@ class BrowserWebDriver:
 		self.set_headless_mode(headless_mode)
 		self.set_user_agent(user_agent)
 		self.set_start_page_url(start_page_url)
+		self.set_trio_tokens_limit(trio_tokens_limits)
 		self._window_rect = window_rect
 	
 	@property
@@ -1379,25 +1398,30 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Updates various browser settings after initialization.
+		Updates various browser settings after initialization or selectively.
 
-		This method allows for dynamic updating of browser settings such as
-		DevTools enablement, automation hiding, debugging port, profile directory,
-		headless mode, audio muting, proxy configuration, user agent string, and window rectangle.
+		This method allows for dynamic updating of browser settings. Only the settings
+		provided (not None) will be updated.
 
 		Args:
-			enable_devtools (Optional[bool]): Enables or disables DevTools integration. Defaults to None.
-			hide_automation (Optional[bool]): Sets whether to hide browser automation indicators. Defaults to None.
-			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Enables or disables headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Mutes or unmutes audio output in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
-			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Enable/disable DevTools integration. Defaults to None (no change).
+			hide_automation (Optional[bool]): Set whether to hide browser automation indicators. Defaults to None (no change).
+			debugging_port (Optional[int]): Specify a debugging port. Defaults to None (no change initially, but see note below).
+			profile_dir (Optional[str]): Set the browser profile directory. Defaults to None (no change).
+			headless_mode (Optional[bool]): Enable/disable headless mode. Defaults to None (no change).
+			mute_audio (Optional[bool]): Mute/unmute audio output. Defaults to None (no change).
+			proxy (Optional[Union[str, Sequence[str]]]): Configure proxy settings. Defaults to None (no change).
+			user_agent (Optional[str]): Set a custom user agent string. Defaults to None (no change).
+			window_rect (Optional[WindowRect]): Update the window rectangle settings. Defaults to None (no change).
+			start_page_url (Optional[str]): Set the start page URL. Defaults to None (no change).
+			trio_tokens_limits (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
+
+		Note:
+			The debugging port is ultimately determined by `find_debugging_port`, which might use
+			the provided `debugging_port` and `profile_dir` values.
 		"""
 		
 		if enable_devtools is not None:
@@ -1427,6 +1451,9 @@ class BrowserWebDriver:
 		if start_page_url is not None:
 			self.set_start_page_url(start_page_url)
 		
+		if trio_tokens_limits is not None:
+			self.set_trio_tokens_limit(trio_tokens_limits)
+		
 		self.set_debugging_port(self.find_debugging_port(debugging_port, profile_dir))
 	
 	def start_webdriver(
@@ -1440,24 +1467,27 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Starts the WebDriver and browser session.
+		Starts the WebDriver service and the browser session.
 
 		Initializes and starts the WebDriver instance and the associated browser process.
-		It first updates settings based on provided parameters, checks if a WebDriver instance is already active,
-		and if not, starts the WebDriver service and then creates a new browser session.
+		It first updates settings based on provided parameters (if the driver is not already running),
+		checks if a WebDriver service process needs to be started, starts it if necessary using Popen,
+		waits for it to become active, and then creates the WebDriver client instance (`self.driver`).
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for this start. Defaults to None (use current setting).
+			debugging_port (Optional[int]): Override debugging port for this start. Defaults to None (use current setting).
+			profile_dir (Optional[str]): Override profile directory for this start. Defaults to None (use current setting).
+			headless_mode (Optional[bool]): Override headless mode for this start. Defaults to None (use current setting).
+			mute_audio (Optional[bool]): Override audio muting for this start. Defaults to None (use current setting).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for this start. Defaults to None (use current setting).
+			user_agent (Optional[str]): Override user agent for this start. Defaults to None (use current setting).
+			window_rect (Optional[WindowRect]): Override window rectangle for this start. Defaults to None (use current setting).
+			start_page_url (Optional[str]): Override start page URL for this start. Defaults to None (use current setting).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
 		"""
 		
 		if self.driver is None:
@@ -1471,6 +1501,7 @@ class BrowserWebDriver:
 					user_agent=user_agent,
 					window_rect=window_rect,
 					start_page_url=start_page_url,
+					trio_tokens_limits=trio_tokens_limits,
 			)
 		
 			self._is_active = self.check_webdriver_active()
@@ -1517,24 +1548,27 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Restarts the WebDriver and browser session.
+		Restarts the WebDriver and browser session gracefully.
 
-		Performs a complete restart of the WebDriver and browser. It first closes the existing WebDriver
-		and browser session using `close_webdriver`, and then starts a new session using `start_webdriver`
-		with the provided or current settings. This is useful for resetting the browser state between tests or operations.
+		Performs a clean restart by first closing the existing WebDriver session and browser
+		(using `close_webdriver`), and then initiating a new session (using `start_webdriver`)
+		with potentially updated settings. If settings arguments are provided, they override
+		the existing settings for the new session; otherwise, the current settings are used.
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration for the new session. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the new browser session. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory for the new session. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the new browser session in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the new browser session. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for the new session. Defaults to None.
-			user_agent (Optional[str]): User agent string to use for the new session. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings for the new session. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for the new session. Defaults to None (use current).
+			debugging_port (Optional[int]): Override debugging port for the new session. Defaults to None (use current).
+			profile_dir (Optional[str]): Override profile directory for the new session. Defaults to None (use current).
+			headless_mode (Optional[bool]): Override headless mode for the new session. Defaults to None (use current).
+			mute_audio (Optional[bool]): Override audio muting for the new session. Defaults to None (use current).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for the new session. Defaults to None (use current).
+			user_agent (Optional[str]): Override user agent for the new session. Defaults to None (use current).
+			window_rect (Optional[WindowRect]): Override window rectangle for the new session. Defaults to None (use current).
+			start_page_url (Optional[str]): Override start page URL for the new session. Defaults to None (use current).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
 		"""
 		
 		self.close_webdriver()
@@ -1550,6 +1584,7 @@ class BrowserWebDriver:
 				user_agent=user_agent,
 				window_rect=window_rect,
 				start_page_url=start_page_url,
+				trio_tokens_limits=trio_tokens_limits,
 		)
 	
 	def scroll_by_amount_action(
@@ -1791,57 +1826,71 @@ class BrowserWebDriver:
 			TrioBrowserWebDriverWrapper: A TrioBrowserWebDriverWrapper instance wrapping this BrowserWebDriver.
 		"""
 		
-		return TrioBrowserWebDriverWrapper(webdriver_=self)
+		return TrioBrowserWebDriverWrapper(_webdriver=self)
 
 
 class TrioBrowserWebDriverWrapper:
 	"""
-	Wraps BrowserWebDriver for asynchronous execution in Trio.
+	Wraps BrowserWebDriver methods for asynchronous execution using Trio.
 
-	This class provides a wrapper around BrowserWebDriver to make its methods compatible with Trio's
-	asynchronous execution model. It uses `trio.to_thread.run_sync` to execute WebDriver commands
-	in separate threads, preventing them from blocking the Trio event loop.
+	This class acts as a proxy to a `BrowserWebDriver` instance. It intercepts
+	method calls and executes them in a separate thread using `trio.to_thread.run_sync`,
+	allowing synchronous WebDriver operations to be called from asynchronous Trio code
+	without blocking the event loop. Properties and non-callable attributes are accessed directly.
 
 	Attributes:
-		_webdriver (BrowserWebDriver): The BrowserWebDriver instance being wrapped.
+		_webdriver (BrowserWebDriver): The underlying synchronous BrowserWebDriver instance.
+		_excluding_functions (Sequence[str]): A list of attribute names on the wrapped object
+											  that should *not* be accessible through this wrapper,
+											  typically because they are irrelevant or dangerous
+											  in an async context handled by the wrapper.
 	"""
 	
-	def __init__(self, webdriver_: BrowserWebDriver):
+	def __init__(self, _webdriver: BrowserWebDriver):
 		"""
 		Initializes the TrioBrowserWebDriverWrapper.
 
 		Args:
-			webdriver_ (BrowserWebDriver): The BrowserWebDriver instance to wrap.
+			_webdriver (BrowserWebDriver): The BrowserWebDriver instance to wrap.
 		"""
 		
-		self._webdriver = webdriver_
+		self._webdriver = _webdriver
+		self._excluding_functions = ["to_wrapper"]
 	
-	def __getattr__(self, name):
+	def __getattr__(self, name) -> Any:
 		"""
-		Overrides attribute access to run BrowserWebDriver methods asynchronously.
+		Intercepts attribute access to wrap callable methods for asynchronous execution.
 
-		This method is a special Python method that gets called when an attribute is accessed that
-		doesn't exist on the `TrioBrowserWebDriverWrapper` instance itself. In this case, it's used to intercept
-		calls to methods of the wrapped `BrowserWebDriver` instance and execute them in a non-blocking way
-		using `trio.to_thread.run_sync`. This ensures that WebDriver operations, which are inherently synchronous,
-		do not block the asynchronous Trio event loop.
+		When an attribute (method or property) is accessed on this wrapper:
+		1. Checks if the attribute name is in the `_excluding_functions` list. If so, raises AttributeError.
+		2. Retrieves the attribute from the underlying `_webdriver` object.
+		3. If the attribute is callable (i.e., a method), it returns a new asynchronous
+		   function (`wrapped`). When this `wrapped` function is called (`await wrapper.some_method()`),
+		   it executes the original synchronous method (`attr`) in a separate thread managed by Trio,
+		   using `trio.to_thread.run_sync` and applying the capacity limiter from the wrapped object.
+		4. If the attribute is not callable (e.g., a property), it returns the attribute's value directly.
 
 		Args:
 			name (str): The name of the attribute being accessed.
 
 		Returns:
-			Any: If the attribute is a method of `BrowserWebDriver`, returns a wrapped asynchronous version of the method.
-				 If the attribute is a property, returns the property directly from `BrowserWebDriver`.
+			Any: Either an asynchronous wrapper function (awaitable) for a method, or the direct value
+				 of a property or non-callable attribute from the underlying `_webdriver` instance.
+
+		Raises:
+			AttributeError: If the attribute `name` is listed in `_excluding_functions` or
+							if it does not exist on the underlying `_webdriver` object.
 		"""
 		
-		if name in ["to_wrapper"]:
+		if name in self._excluding_functions:
 			raise AttributeError(f"Don't use {name} method in TrioBrowserWebDriverWrapper!")
 		else:
 			attr = getattr(self._webdriver, name)
 		
 			if callable(attr):
 				def wrapped(*args, **kwargs):
-					return trio.to_thread.run_sync(attr, *args, **kwargs)
+					func_with_kwargs = partial(attr, **kwargs)
+					return trio.to_thread.run_sync(func_with_kwargs, *args, limiter=self._webdriver.trio_capacity_limiter)
 		
 				return wrapped
 		
