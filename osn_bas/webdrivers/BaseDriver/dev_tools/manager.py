@@ -503,7 +503,7 @@ class DevTools:
 	
 	def set_request_paused_handler(
 			self,
-			listen_buffer_size: int,
+			listen_buffer_size: int = 50,
 			post_data_instances: Optional[Any] = None,
 			headers_instances: Optional[dict[str, fetch.HeaderInstance]] = None,
 			post_data_handler: Optional[fetch.post_data_handler_type] = None,
@@ -536,54 +536,6 @@ class DevTools:
 				to process and modify the request's headers. This function receives the handler settings,
 				the DevTools header entry class, and the event object. If None, a default handler
 				(likely one that applies `headers_instances`) is used. Defaults to None.
-
-		Returns:
-			None: This method configures the handler but does not return a value.
-
-		Usage
-		______
-		# Assume 'driver' is an instance of BrowserWebDriver or similar
-		# Assume 'fetch' module and its types (HeaderInstance, post_data_handler_type, etc.) are imported
-
-		# Define a custom header handler function (must be awaitable if running in Trio)
-		async def modify_headers_example(handler_settings: RequestPausedHandlerSettings, HeaderEntry: type, event: Any):
-			print(f"Intercepted request for URL: {event.request.url}")
-			# Example: Modify the User-Agent header using the default logic with instances
-			modified_headers = fetch.default_headers_handler(handler_settings, HeaderEntry, event)
-
-			# Example: Add/modify another header manually
-			found = False
-			for header in modified_headers:
-				 if header['name'].lower() == 'x-my-trace-id':
-					  header['value'] = 'new-trace-value'
-					  found = True
-					  break
-			if not found:
-				 modified_headers.append({'name': 'X-My-Trace-Id', 'value': 'initial-trace'})
-
-			return modified_headers
-
-		# Define header instances
-		headers_to_set = {
-			"User-Agent": HeaderInstance(value="MyAutomatedClient/1.0", instruction="set")
-		}
-
-		# Activate DevTools context and set the handler
-		# The DevTools context managers (async with) handle enabling/disabling the CDP domain.
-		async with driver.dev_tools as dev_tools:
-			# Set up the handler for request pausing
-			dev_tools.set_request_paused_handler(
-				listen_buffer_size=20, # Important for async event loop
-				headers_instances=headers_to_set, # Provide instance configs
-				headers_handler=modify_headers_example # Provide custom handler function
-			)
-			print("Request paused handler set. Navigating...")
-			# Perform actions that will trigger network requests
-			await driver.search_url("https://example.com/some_api")
-			# Keep the context alive while waiting for events if needed
-			await trio.sleep(5) # Example: Wait for requests to happen
-
-		print("DevTools context exited.")
 		"""
 		
 		self._set_handler_settings(
