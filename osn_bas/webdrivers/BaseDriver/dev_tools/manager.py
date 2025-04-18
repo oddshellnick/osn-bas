@@ -31,7 +31,7 @@ from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
 	Fetch,
 	special_keys
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+from osn_bas.webdrivers.BaseDriver.dev_tools._utils import (
 	log_on_error,
 	validate_handler_settings,
 	warn_if_active
@@ -140,7 +140,8 @@ class DevTools:
 			try:
 				event = await receiver_channel.receive()
 		
-				self._nursery_object.start_soon(self._handle_new_target, event.target_info.target_id)
+				if event.target_info.type_ == "page":
+					self._nursery_object.start_soon(self._handle_new_target, event.target_info.target_id)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):

@@ -1,5 +1,5 @@
-from typing import Optional
 from win32api import GetSystemMetrics
+from typing import Optional, TypedDict
 
 
 class WindowRect:
@@ -73,3 +73,46 @@ class WindowRect:
 			self.height = height
 		
 		return self
+
+
+class Size(TypedDict):
+	"""
+	Represents a dictionary structure defining the size.
+
+	Attributes:
+		width (int): The width of the rectangle along the x-axis.
+		height (int): The height of the rectangle along the y-axis.
+	"""
+	
+	width: int
+	height: int
+
+
+class Rectangle(TypedDict):
+	"""
+	Represents a dictionary structure defining the properties of a rectangle.
+
+	Attributes:
+		x (int): The x-coordinate of the top-left corner of the rectangle.
+		y (int): The y-coordinate of the top-left corner of the rectangle.
+		width (int): The width of the rectangle along the x-axis.
+		height (int): The height of the rectangle along the y-axis.
+	"""
+	
+	x: int
+	y: int
+	width: int
+	height: int
+
+
+class Position(TypedDict):
+	"""
+	Represents a dictionary structure defining the position.
+
+	Attributes:
+		x (int): The x-coordinate of the top-left corner of the rectangle.
+		y (int): The y-coordinate of the top-left corner of the rectangle.
+	"""
+	
+	x: int
+	y: int

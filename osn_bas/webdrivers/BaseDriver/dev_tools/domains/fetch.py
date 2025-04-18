@@ -21,6 +21,7 @@ class HeaderInstance(TypedDict):
 	Attributes:
 		value (Union[str, Any]): The new value to set for the header. Can be a string or any other type that can be converted to a string.
 		instruction (Union[Literal["set", "set_exist", "remove"], Any]): Specifies the type of modification to apply to the header.
+
 			- "set": Sets the header to the provided `value`, overwriting any existing value.
 			- "set_exist": Sets the header to the provided `value` only if the header already exists in the request.
 			- "remove": Removes the header from the request.

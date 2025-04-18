@@ -1,32 +1,48 @@
+import math
 import trio
 import pathlib
 from random import random
 from subprocess import Popen
+from functools import partial
 from selenium import webdriver
 from typing import Any, Optional, Union
-from osn_bas.utilities import WindowRect
 from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains
+from osn_bas.webdrivers.types import ActionPoint
 from selenium.webdriver.remote.webelement import WebElement
 from osn_windows_cmd.taskkill.parameters import TaskKillTypes
+from selenium.webdriver.common.actions.key_input import KeyInput
 from osn_bas.webdrivers.BaseDriver.dev_tools.manager import DevTools
 from osn_bas.webdrivers.BaseDriver.start_args import BrowserStartArgs
 from osn_windows_cmd.taskkill import (
 	ProcessID,
 	taskkill_windows
 )
-from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
+from osn_bas.types import (
+	Position,
+	Rectangle,
+	Size,
+	WindowRect
+)
+from selenium.webdriver.common.actions.pointer_input import PointerInput
 from selenium.webdriver.remote.remote_connection import RemoteConnection
 from osn_bas.webdrivers.BaseDriver.options import (
 	BrowserOptionsManager
 )
-from osn_bas.webdrivers.functions import (
-	find_browser_previous_session,
-	read_js_scripts
+from selenium.webdriver.common.actions.wheel_input import (
+	ScrollOrigin,
+	WheelInput
 )
 from osn_windows_cmd.netstat import (
 	get_localhost_minimum_free_port,
 	get_localhost_processes_with_pids
+)
+from osn_bas.webdrivers._functions import (
+	find_browser_previous_session,
+	move_to_parts,
+	read_js_scripts,
+	scroll_to_parts,
+	text_input_to_parts
 )
 
 
@@ -41,7 +57,7 @@ class BrowserWebDriver:
 
 	Attributes:
 		_window_rect (WindowRect): Initial window rectangle settings.
-		_js_scripts (dict[str, str]): Collection of JavaScript scripts for browser interaction.
+		_js_scripts (JS_Scripts): Collection of JavaScript scripts for browser interaction.
 		_browser_exe (Union[str, pathlib.Path]): Path to the browser executable.
 		_webdriver_path (str): Path to the WebDriver executable.
 		_webdriver_start_args (BrowserStartArgs): Manages WebDriver startup arguments.
@@ -51,6 +67,7 @@ class BrowserWebDriver:
 		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
 		_base_page_load_timeout (int): Base page load timeout for page loading operations.
 		_is_active (bool): Indicates if the WebDriver instance is currently active.
+		trio_capacity_limiter (trio.CapacityLimiter): Trio capacity limiter for controlling concurrent operations.
 		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
 	"""
 	
@@ -72,6 +89,7 @@ class BrowserWebDriver:
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
+			trio_tokens_limit: Union[int, math.inf] = 40,
 	):
 		"""
 		Initializes the BrowserWebDriver instance.
@@ -96,6 +114,7 @@ class BrowserWebDriver:
 			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5 seconds.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to a default WindowRect instance if None.
 			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Use math.inf for unlimited. Defaults to 40.
 		"""
 		
 		if window_rect is None:
@@ -113,6 +132,7 @@ class BrowserWebDriver:
 		self._base_implicitly_wait = implicitly_wait
 		self._base_page_load_timeout = page_load_timeout
 		self._is_active = False
+		self.trio_capacity_limiter = trio.CapacityLimiter(trio_tokens_limit)
 		self.dev_tools = DevTools(self)
 		
 		self.update_settings(
@@ -127,48 +147,605 @@ class BrowserWebDriver:
 				start_page_url=start_page_url,
 		)
 	
-	def switch_to_window(self, window: Optional[Union[str, int]] = None):
+	def build_action_chains(
+			self,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
 		"""
-		Switches focus to the specified window.
+		Builds and returns a new Selenium ActionChains instance.
 
-		Allows switching the WebDriver's focus to a different browser window or tab.
-		Windows can be specified by their handle, index, or name.
+		Initializes an ActionChains object associated with the current WebDriver instance (`self.driver`).
+		Allows specifying the default pause duration between actions and custom input device sources.
 
 		Args:
-			window (Optional[Union[str, int]]): The name, index, or handle of the window to switch to.
-				If a string, it's treated as window name or handle. If an integer, it's the window index (0-based).
-				If None, switches to the current window. Defaults to None.
+			duration (int): The default duration in milliseconds to pause between actions
+				within the chain. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): A list of
+				specific input device sources (Pointer, Key, Wheel) to use for the actions.
+				If None, default devices are used. Defaults to None.
+
+		Returns:
+			ActionChains: A new ActionChains instance configured with the specified driver,
+				duration, and devices.
+		"""
+		
+		return ActionChains(driver=self.driver, duration=duration, devices=devices)
+	
+	def build_hm_move_action(
+			self,
+			start_position: ActionPoint,
+			end_position: ActionPoint,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like mouse move action sequence between two points.
+
+		Simulates a more natural mouse movement by breaking the path into smaller segments with pauses,
+		calculated by the external `move_to_parts` function. Adds the corresponding move-by-offset
+		actions and pauses to an ActionChains sequence. Assumes the starting point of the cursor
+		is implicitly handled or should be set prior to performing this chain.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (absolute or relative, depends on `move_to_parts` logic).
+			end_position (ActionPoint): The target coordinates for the mouse cursor.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total move time depends on `move_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like move sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		move_parts = move_to_parts(start_position=start_position, end_position=end_position)
+		
+		for part in move_parts:
+			action.pause(part.duration * 0.001)
+			action.move_by_offset(xoffset=part.offset.x, yoffset=part.offset.y)
+		
+		return action
+	
+	def execute_js_script(self, script: str, *args) -> Any:
+		"""
+		Executes a JavaScript script in the current browser context.
+
+		Executes arbitrary JavaScript code within the currently loaded webpage. This allows for
+		performing actions that are not directly supported by WebDriver commands, such as complex
+		DOM manipulations or accessing browser APIs.
+
+		Args:
+			script (str): The JavaScript code to execute as a string.
+			*args: Arguments to pass to the JavaScript script. These are accessible in the script as `arguments[0]`, `arguments[1]`, etc.
+
+		Returns:
+			Any: The result of the JavaScript execution. JavaScript return values are converted to Python types.
+				For example, JavaScript objects become Python dictionaries, arrays become lists, and primitives are converted directly.
+		"""
+		
+		return self.driver.execute_script(script, *args)
+	
+	def get_element_rect_in_viewport(self, element: WebElement) -> Rectangle:
+		"""
+		Gets the position and dimensions of an element relative to the viewport.
+
+		Executes a predefined JavaScript snippet that calculates the element's bounding rectangle
+		as seen in the current viewport.
+
+		Args:
+			element (WebElement): The Selenium WebElement whose rectangle is needed.
+
+		Returns:
+			Rectangle: A TypedDict containing the 'x', 'y', 'width', and 'height' of the element
+					   relative to the viewport's top-left corner. 'x' and 'y' can be negative
+					   if the element is partially scrolled out of view to the top or left.
+		"""
+		
+		rect = self.execute_js_script(self._js_scripts["get_element_rect_in_viewport"], element)
+		
+		return Rectangle(
+				x=int(rect["x"]),
+				y=int(rect["y"]),
+				width=int(rect["width"]),
+				height=int(rect["height"])
+		)
+	
+	def get_random_element_point_in_viewport(self, element: WebElement, step: int = 1) -> Optional[Position]:
+		"""
+		Calculates a random point within the visible portion of a given element in the viewport.
+
+		Executes a predefined JavaScript snippet that determines the element's bounding box
+		relative to the viewport, calculates the intersection of this box with the viewport,
+		and then selects a random point within that intersection, potentially aligned to a grid defined by `step`.
+
+		Args:
+			element (WebElement): The Selenium WebElement to find a random point within.
+			step (int): Defines the grid step for selecting the random point. The coordinates
+				will be multiples of this step within the valid range. Defaults to 1 (any pixel).
+
+		Returns:
+			Position: A TypedDict containing the integer 'x' and 'y' coordinates of a random point
+					  within the element's visible area in the viewport. Coordinates are relative
+					  to the element's top-left corner (0,0).
+		"""
+		
+		position = self.execute_js_script(self._js_scripts["get_random_element_point_in_viewport"], element, step)
+		
+		if position is not None:
+			return Position(x=int(position["x"]), y=int(position["y"]))
+		
+		return None
+	
+	def get_random_element_point(self, element: WebElement) -> ActionPoint:
+		"""
+		Gets the coordinates of a random point within an element, relative to the viewport origin.
+
+		Calculates a random point within the visible portion of the element relative to the
+		element's own top-left corner. It then adds the element's top-left coordinates
+		(relative to the viewport) to get the final coordinates of the random point,
+		also relative to the viewport's top-left origin (0,0).
+
+		Args:
+			element (WebElement): The target element within which to find a random point.
+
+		Returns:
+			ActionPoint: An ActionPoint named tuple containing the 'x' and 'y' coordinates
+						 of the random point within the element, relative to the viewport origin.
+		"""
+		
+		point_in_viewport = self.get_random_element_point_in_viewport(element=element, step=1)
+		element_viewport_pos = self.get_element_rect_in_viewport(element=element)
+		
+		x = int(element_viewport_pos["x"] + point_in_viewport["x"])
+		y = int(element_viewport_pos["y"] + point_in_viewport["y"])
+		
+		return ActionPoint(x=x, y=y)
+	
+	def build_hm_move_to_element_action(
+			self,
+			start_position: ActionPoint,
+			element: WebElement,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> tuple[ActionChains, ActionPoint]:
+		"""
+		Builds a human-like mouse move action from a start point to a random point within a target element.
+
+		Determines a random target point within the element's boundary relative to the viewport
+		(using `get_random_element_point`) and then uses `build_hm_move_action` to create
+		a human-like movement sequence to that point. Returns both the action chain and the
+		calculated end point.
+
+		Args:
+			start_position (ActionPoint): The starting coordinates (relative to viewport) for the mouse movement.
+			element (WebElement): The target element to move the mouse into.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+													If None, a new chain is created. Defaults to None.
+			duration (int): Base duration (in milliseconds) used when creating a new ActionChains
+							instance if `parent_action` is None. Total move time depends on the
+							`move_to_parts` calculation within `build_hm_move_action`. Defaults to 250.
+			devices (Optional[List[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+																				 to use if creating a new ActionChains
+																				 instance. Defaults to None.
+
+		Returns:
+			Tuple[ActionChains, ActionPoint]: A tuple containing:
+
+				- The ActionChains instance with the human-like move-to-element sequence added.
+				  Needs to be finalized with `.perform()`.
+				- The calculated end `ActionPoint` (relative to viewport) within the element that the
+				  mouse path targets.
+		"""
+		
+		end_position = self.get_random_element_point(element=element)
+		
+		return (
+				self.build_hm_move_action(
+						start_position=start_position,
+						end_position=end_position,
+						parent_action=parent_action,
+						duration=duration,
+						devices=devices
+				),
+				end_position
+		)
+	
+	def get_viewport_size(self) -> Size:
+		"""
+		Gets the current dimensions (width and height) of the browser's viewport.
+
+		Executes a predefined JavaScript snippet to retrieve the inner width and height
+		of the window.
+
+		Returns:
+			Size: A TypedDict containing the 'width' and 'height' of the viewport in pixels.
+		"""
+		
+		size = self.execute_js_script(self._js_scripts["get_viewport_size"])
+		
+		return Size(width=int(size["width"]), height=int(size["height"]))
+	
+	def build_hm_scroll_action(
+			self,
+			delta_x: int,
+			delta_y: int,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action sequence by breaking the scroll into smaller parts with pauses.
+
+		This method simulates a more natural scroll compared to a direct jump. It calculates scroll segments
+		using an external `scroll_to_parts` function and adds corresponding scroll actions and pauses
+		to an ActionChains sequence. If no origin is provided, it defaults to scrolling from the
+		bottom-right corner for positive deltas and top-left for negative deltas of the viewport.
+
+		Args:
+			delta_x (int): The total horizontal distance to scroll. Positive scrolls right, negative scrolls left.
+			delta_y (int): The total vertical distance to scroll. Positive scrolls down, negative scrolls up.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll (viewport or element center).
+				If None, defaults to a viewport corner based on scroll direction. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. This duration is *not* directly the total scroll time,
+				which is determined by the sum of pauses from `scroll_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				to use if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like scroll sequence added.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		if origin is None:
+			viewport_size = self.get_viewport_size()
+			origin_x = 0 if delta_x >= 0 else viewport_size["width"]
+			origin_y = 0 if delta_y >= 0 else viewport_size["height"]
+			origin = ScrollOrigin.from_viewport(origin_x, origin_y)
+		
+		start_position = ActionPoint(x=int(origin.x_offset), y=int(origin.y_offset))
+		end_position = ActionPoint(x=int(origin.x_offset) + delta_x, y=int(origin.y_offset) + delta_y)
+		
+		scroll_parts = scroll_to_parts(start_position=start_position, end_position=end_position)
+		
+		for part in scroll_parts:
+			action.pause(part.duration * 0.001)
+			action.scroll_from_origin(scroll_origin=origin, delta_x=int(part.delta.x), delta_y=int(part.delta.y))
+		
+		return action
+	
+	def get_viewport_rect(self) -> Rectangle:
+		"""
+		Gets the position and dimensions of the viewport relative to the document origin.
+
+		Combines the scroll position (top-left corner) and the viewport dimensions.
+		Executes a predefined JavaScript snippet.
+
+		Returns:
+			Rectangle: A TypedDict where 'x' and 'y' represent the current scroll offsets
+					   (window.pageXOffset, window.pageYOffset) and 'width' and 'height' represent
+					   the viewport dimensions (window.innerWidth, window.innerHeight).
+		"""
+		
+		rect = self.execute_js_script(self._js_scripts["get_viewport_rect"])
+		
+		return Rectangle(
+				x=int(rect["x"]),
+				y=int(rect["y"]),
+				width=int(rect["width"]),
+				height=int(rect["height"])
+		)
+	
+	def build_hm_scroll_to_element_action(
+			self,
+			element: WebElement,
+			additional_lower_y_offset: int = 0,
+			additional_upper_y_offset: int = 0,
+			additional_right_x_offset: int = 0,
+			additional_left_x_offset: int = 0,
+			origin: Optional[ScrollOrigin] = None,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like scroll action to bring an element into view with optional offsets.
+
+		Calculates the necessary scroll delta (dx, dy) to make the target element visible within the
+		viewport, considering additional offset margins. It then uses `build_hm_scroll_action`
+		to perform the scroll in a human-like manner.
+
+		Args:
+			element (WebElement): The target element to scroll into view.
+			additional_lower_y_offset (int): Extra space (in pixels) to leave below the element within the viewport. Defaults to 0.
+			additional_upper_y_offset (int): Extra space (in pixels) to leave above the element within the viewport. Defaults to 0.
+			additional_right_x_offset (int): Extra space (in pixels) to leave to the right of the element within the viewport. Defaults to 0.
+			additional_left_x_offset (int): Extra space (in pixels) to leave to the left of the element within the viewport. Defaults to 0.
+			origin (Optional[ScrollOrigin]): The origin point for the scroll. Passed to `build_hm_scroll_action`. Defaults to None.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to None.
+			duration (int): Base duration for creating a new ActionChains instance. Passed to `build_hm_scroll_action`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices. Passed to `build_hm_scroll_action`. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance containing the human-like scroll-to-element sequence.
+						  Needs to be finalized with `.perform()`.
+		"""
+		
+		viewport_rect = self.get_viewport_rect()
+		element_rect = self.get_element_rect_in_viewport(element)
+		
+		if element_rect["x"] < additional_left_x_offset:
+			delta_x = int(element_rect["x"] - additional_left_x_offset)
+		elif element_rect["x"] + element_rect["width"] > viewport_rect["width"] - additional_right_x_offset:
+			delta_x = int(
+					element_rect["x"] +
+					element_rect["width"] -
+					(viewport_rect["width"] - additional_right_x_offset)
+			)
+		else:
+			delta_x = 0
+		
+		if element_rect["y"] < additional_upper_y_offset:
+			delta_y = int(element_rect["y"] - additional_upper_y_offset)
+		elif element_rect["y"] + element_rect["height"] > viewport_rect["height"] - additional_lower_y_offset:
+			delta_y = int(
+					element_rect["y"] +
+					element_rect["height"] -
+					(viewport_rect["height"] - additional_lower_y_offset)
+			)
+		else:
+			delta_y = 0
+		
+		return self.build_hm_scroll_action(
+				delta_x=delta_x,
+				delta_y=delta_y,
+				origin=origin,
+				parent_action=parent_action,
+				duration=duration,
+				devices=devices
+		)
+	
+	def build_hm_text_input_action(
+			self,
+			text: str,
+			parent_action: Optional[ActionChains] = None,
+			duration: int = 250,
+			devices: Optional[list[Union[PointerInput, KeyInput, WheelInput]]] = None
+	) -> ActionChains:
+		"""
+		Builds a human-like text input action sequence.
+
+		Simulates typing by breaking the input text into smaller chunks with pauses between them,
+		calculated by the external `text_input_to_parts` function. Adds the corresponding
+		send_keys actions and pauses to an ActionChains sequence.
+
+		Args:
+			text (str): The text string to be typed.
+			parent_action (Optional[ActionChains]): An existing ActionChains instance to append actions to.
+				If None, a new chain is created. Defaults to None.
+			duration (int): The base duration (in milliseconds) used when creating a new ActionChains
+				instance if `parent_action` is None. Total input time depends on `text_input_to_parts`. Defaults to 250.
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+				if creating a new ActionChains instance. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (new or parent) with the human-like text input sequence added.
+						  Needs to be finalized with `.perform()`. Requires the target input element to have focus.
+		"""
+		
+		if parent_action is None:
+			action = self.build_action_chains(duration=duration, devices=devices)
+		else:
+			action = parent_action
+		
+		input_parts = text_input_to_parts(text)
+		
+		for part in input_parts:
+			action.pause(part.duration * 0.001)
+			action.send_keys(part.text)
+		
+		return action
+	
+	def check_element_in_viewport(self, element: WebElement) -> bool:
+		"""
+		Checks if the specified web element is currently within the browser's viewport.
+
+		Executes a predefined JavaScript snippet to determine the visibility status.
+
+		Args:
+			element (WebElement): The Selenium WebElement to check.
+
+		Returns:
+			bool: True if the element is at least partially within the viewport, False otherwise.
+		"""
+		
+		return self.execute_js_script(self._js_scripts["check_element_in_viewport"], element)
+	
+	def click_action(
+			self,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a click action. Clicks on the specified element or the current mouse position if no element is provided.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (Optional[WebElement]): The web element to click. If None, clicks at the
+				current mouse cursor position. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the click action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.click(on_element=element)
+		
+		return action_chain
+	
+	def click_and_hold_action(
+			self,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a click-and-hold action. Holds down the left mouse button on the specified element or the current mouse position.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (Optional[WebElement]): The web element to click and hold. If None, clicks
+				and holds at the current mouse cursor position. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the click-and-hold action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.click_and_hold(on_element=element)
+		
+		return action_chain
+	
+	@property
+	def windows_handles(self) -> list[str]:
+		"""
+		Gets the handles of all open windows.
+
+		Returns a list of handles for all browser windows or tabs currently open and managed by the WebDriver.
+		This is useful for iterating through or managing multiple windows in a browser session.
+
+		Returns:
+		   list[str]: A list of window handles. Each handle is a string identifier for an open window.
+		"""
+		
+		return self.driver.window_handles
+	
+	def get_window_handle(self, window: Optional[Union[str, int]] = None) -> str:
+		"""
+		Retrieves a window handle string based on the provided identifier.
+
+		If the identifier is already a string, it's assumed to be a valid handle and returned directly.
+		If it's an integer, it's treated as an index into the list of currently open window handles.
+		If it's None or not provided, the handle of the currently active window is returned.
+
+		Args:
+			window (Optional[Union[str, int]]): The identifier for the desired window handle.
+
+				- str: Assumed to be the window handle itself.
+				- int: Index into the list of window handles (self.driver.window_handles).
+				- None: Get the handle of the currently focused window.
+
+		Returns:
+			str: The window handle string corresponding to the input identifier.
 		"""
 		
 		if isinstance(window, str):
-			self.driver.switch_to.window(window)
+			return window
 		elif isinstance(window, int):
-			self.driver.switch_to.window(self.driver.window_handles[window])
+			return self.driver.window_handles[window]
 		else:
-			self.driver.switch_to.window(self.driver.current_window_handle)
+			return self.driver.current_window_handle
+	
+	def switch_to_window(self, window: Optional[Union[str, int]] = None):
+		"""
+		Switches the driver's focus to the specified browser window.
+
+		Uses get_window_handle to resolve the target window identifier (handle string or index)
+		before instructing the driver to switch. If no window identifier is provided,
+		it effectively switches to the current window.
+
+		Args:
+			window (Optional[Union[str, int]]): The identifier of the window to switch to.
+				Can be a window handle (string) or an index (int) in the list of window handles.
+				If None, targets the current window handle.
+		"""
+		
+		self.driver.switch_to.window(self.get_window_handle(window))
+	
+	@property
+	def current_window_handle(self) -> str:
+		"""
+		Gets the current window handle.
+
+		Retrieves the handle of the currently active browser window or tab. Window handles are unique identifiers
+		used by WebDriver to distinguish between different browser windows.
+
+		Returns:
+			str: The current window handle.
+		"""
+		
+		return self.driver.current_window_handle
 	
 	def close_window(self, window: Optional[Union[str, int]] = None):
 		"""
-		Closes the specified window.
+		Closes the specified browser window and manages focus switching.
 
-		Closes a browser window or tab. If multiple windows are open, it's possible to specify
-		which window to close by handle, index, or name. After closing, if there are still
-		windows open, the driver switches focus to the last window in the handles list.
+		Identifies the target window to close using get_window_handle. Switches to that window,
+		closes it, and then switches focus back. If the closed window was the currently focused
+		window, it switches focus to the last window in the remaining list. Otherwise, it switches
+		back to the window that had focus before the close operation began.
 
 		Args:
-			window (Optional[Union[str, int]]): The name, index, or handle of the window to close.
-				If a string, it's treated as window name or handle. If an integer, it's the window index (0-based).
-				If None, closes the current window. Defaults to None.
+			window (Optional[Union[str, int]]): The identifier of the window to close.
+				Can be a window handle (string), an index (int), or None to close the
+				currently focused window.
 		"""
 		
-		if window is not None:
-			switch_to_new_window = window == self.driver.current_window_handle
+		start_window_handle = self.current_window_handle
+		close_window_handle = self.get_window_handle(window)
 		
-			self.switch_to_window(window)
-			self.driver.close()
+		is_current_closing = close_window_handle == start_window_handle
 		
-			if switch_to_new_window and len(self.driver.window_handles) > 0:
+		if not is_current_closing:
+			self.switch_to_window(close_window_handle)
+		
+		self.driver.close()
+		
+		if len(self.windows_handles) > 0:
+			if is_current_closing:
 				self.switch_to_window(-1)
+			else:
+				self.switch_to_window(start_window_handle)
 	
 	def close_all_windows(self):
 		"""
@@ -178,8 +755,41 @@ class BrowserWebDriver:
 		This effectively closes the entire browser session managed by the driver.
 		"""
 		
-		for window in self.driver.window_handles:
+		for window in self.windows_handles:
 			self.close_window(window)
+	
+	def context_click_action(
+			self,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a context-click (right-click) action. Performs the action on the specified element or the current mouse position.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (Optional[WebElement]): The web element to context-click. If None, performs
+				the context-click at the current mouse cursor position. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the context-click action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.context_click(on_element=element)
+		
+		return action_chain
 	
 	@property
 	def current_url(self) -> str:
@@ -193,6 +803,111 @@ class BrowserWebDriver:
 		"""
 		
 		return self.driver.current_url
+	
+	def double_click_action(
+			self,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a double-click action. Performs the action on the specified element or the current mouse position.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (Optional[WebElement]): The web element to double-click. If None, double-clicks
+				at the current mouse cursor position. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the double-click action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.double_click(on_element=element)
+		
+		return action_chain
+	
+	def drag_and_drop_action(
+			self,
+			source_element: WebElement,
+			target_element: WebElement,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a drag-and-drop action from a source element to a target element.
+
+		Combines click-and-hold on the source, move to the target, and release.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			source_element (WebElement): The element to click and hold (the start of the drag).
+			target_element (WebElement): The element to move to and release over (the end of the drop).
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the drag-and-drop action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.drag_and_drop(source=source_element, target=target_element)
+		
+		return action_chain
+	
+	def drag_and_drop_by_offset_action(
+			self,
+			source_element: WebElement,
+			xoffset: int,
+			yoffset: int,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a drag-and-drop action from a source element by a given offset.
+
+		Combines click-and-hold on the source, move by the offset, and release.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			source_element (WebElement): The element to click and hold (the start of the drag).
+			xoffset (int): The horizontal distance to move the mouse.
+			yoffset (int): The vertical distance to move the mouse.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the drag-and-drop by offset action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.drag_and_drop_by_offset(source=source_element, xoffset=xoffset, yoffset=yoffset)
+		
+		return action_chain
 	
 	def set_implicitly_wait_timeout(self, timeout: float):
 		"""
@@ -347,9 +1062,6 @@ class BrowserWebDriver:
 
 		Returns:
 			WebElement: The found web element.
-
-		Raises:
-			selenium.common.exceptions.NoSuchElementException: If no element is found within the implicit wait timeout.
 		"""
 		
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
@@ -381,24 +1093,21 @@ class BrowserWebDriver:
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
 		return self.driver.find_elements(by, value)
 	
-	def execute_js_script(self, script: str, *args) -> Any:
+	def get_document_scroll_size(self) -> Size:
 		"""
-		Executes a JavaScript script in the current browser context.
+		Gets the total scrollable dimensions of the HTML document.
 
-		Executes arbitrary JavaScript code within the currently loaded webpage. This allows for
-		performing actions that are not directly supported by WebDriver commands, such as complex
-		DOM manipulations or accessing browser APIs.
-
-		Args:
-			script (str): The JavaScript code to execute as a string.
-			*args: Arguments to pass to the JavaScript script. These are accessible in the script as `arguments[0]`, `arguments[1]`, etc.
+		Executes a predefined JavaScript snippet to retrieve the document's scrollWidth
+		and scrollHeight.
 
 		Returns:
-			Any: The result of the JavaScript execution. JavaScript return values are converted to Python types.
-				For example, JavaScript objects become Python dictionaries, arrays become lists, and primitives are converted directly.
+			Size: A TypedDict where 'width' represents the document's scrollWidth,
+					   'height' represents the scrollHeight.
 		"""
 		
-		return self.driver.execute_script(script, *args)
+		size = self.execute_js_script(self._js_scripts["get_document_scroll_size"])
+		
+		return Size(width=int(size["width"]), height=int(size["height"]))
 	
 	def get_element_css_style(self, element: WebElement) -> dict[str, str]:
 		"""
@@ -430,19 +1139,20 @@ class BrowserWebDriver:
 		
 		return self.driver.command_executor, self.driver.session_id
 	
-	def hover_element(self, element: WebElement, duration: int = 250):
+	def get_viewport_position(self) -> Position:
 		"""
-		Hovers the mouse over an element.
+		Gets the current scroll position of the viewport relative to the document origin (0,0).
 
-		Simulates a mouse hover action over a specified web element. This can trigger hover effects
-		in the webpage, such as dropdown menus or tooltips.
+		Executes a predefined JavaScript snippet to retrieve window.scrollX and window.scrollY.
 
-		Args:
-			element (WebElement): The element to hover over.
-			duration (int): Duration of the hover action in milliseconds. Defaults to 250ms.
+		Returns:
+			Position: A TypedDict containing the 'x' (horizontal scroll offset) and
+					  'y' (vertical scroll offset) of the viewport.
 		"""
 		
-		ActionChains(driver=self.driver, duration=duration).move_to_element(element).perform()
+		position = self.execute_js_script(self._js_scripts["get_viewport_position"])
+		
+		return Position(x=int(position["x"]), y=int(position["y"]))
 	
 	@property
 	def html(self) -> str:
@@ -471,6 +1181,146 @@ class BrowserWebDriver:
 		"""
 		
 		return self._is_active
+	
+	def key_down_action(
+			self,
+			value: str,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a key down (press and hold) action for a specific modifier key.
+
+		Sends the key press to the specified element or the currently focused element.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			value (str): The modifier key to press (e.g., Keys.CONTROL, Keys.SHIFT).
+			element (Optional[WebElement]): The element to send the key press to. If None,
+				sends to the currently focused element. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the key down action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.key_down(value=value, element=element)
+		
+		return action_chain
+	
+	def key_up_action(
+			self,
+			value: str,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a key up (release) action for a specific modifier key.
+
+		Sends the key release to the specified element or the currently focused element.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action. Typically used after `key_down_action`.
+
+		Args:
+			value (str): The modifier key to release (e.g., Keys.CONTROL, Keys.SHIFT).
+			element (Optional[WebElement]): The element to send the key release to. If None,
+				sends to the currently focused element. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the key up action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.key_up(value=value, element=element)
+		
+		return action_chain
+	
+	def move_to_element_action(
+			self,
+			element: WebElement,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a move mouse cursor action to the specified web element.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (WebElement): The target web element to move the mouse to.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the move action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.move_to_element(element)
+		
+		return action_chain
+	
+	def move_to_element_with_offset_action(
+			self,
+			element: WebElement,
+			xoffset: int,
+			yoffset: int,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds an action to move the mouse cursor to an offset from the center of a specified element.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (WebElement): The target web element to base the offset from.
+			xoffset (int): The horizontal offset from the element's center. Positive is right, negative is left.
+			yoffset (int): The vertical offset from the element's center. Positive is down, negative is up.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the move-with-offset action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.move_to_element_with_offset(element, xoffset=xoffset, yoffset=yoffset)
+		
+		return action_chain
 	
 	def open_new_tab(self, link: str = ""):
 		"""
@@ -514,6 +1364,39 @@ class BrowserWebDriver:
 		
 		self.driver.refresh()
 	
+	def release_action(
+			self,
+			element: Optional[WebElement] = None,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a release mouse button action. Releases the depressed left mouse button on the specified element or the current mouse position.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action. Typically used after a `click_and_hold_action`.
+
+		Args:
+			element (Optional[WebElement]): The web element on which to release the mouse button.
+				If None, releases at the current mouse cursor position. Defaults to None.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the release action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.release(on_element=element)
+		
+		return action_chain
+	
 	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
 		"""
 		Connects to an existing remote WebDriver session.
@@ -531,7 +1414,27 @@ class BrowserWebDriver:
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
+	def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, math.inf]):
+		"""
+		Updates the total number of tokens for the Trio capacity limiter.
+
+		Args:
+			trio_tokens_limit (Union[int, float]): The new total token limit. Use math.inf for unlimited.
+		"""
+		
+		self.trio_capacity_limiter.total_tokens = trio_tokens_limit
+	
 	def set_start_page_url(self, start_page_url: str):
+		"""
+		Sets the URL that the WebDriver will navigate to upon starting.
+
+		Updates an internal configuration attribute (`_webdriver_start_args.start_page_url`)
+		which is presumably used during WebDriver initialization.
+
+		Args:
+			start_page_url (str): The absolute URL for the browser to load initially.
+		"""
+		
 		self._webdriver_start_args.start_page_url = start_page_url
 	
 	def set_user_agent(self, user_agent: Optional[str]):
@@ -655,6 +1558,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
+			trio_tokens_limits: Union[int, math.inf] = 40,
 	):
 		"""
 		Resets all configurable browser settings to their default or specified values.
@@ -662,7 +1566,7 @@ class BrowserWebDriver:
 		This method resets various browser settings to the provided values. If no value
 		is provided for certain settings, they are reset to their default states.
 		This includes DevTools, automation hiding, debugging port, profile directory,
-		proxy, audio muting, headless mode, user agent, and window rectangle.
+		proxy, audio muting, headless mode, user agent, window rectangle, and Trio token limits.
 
 		Args:
 			enable_devtools (bool): Enables or disables DevTools integration.
@@ -671,10 +1575,11 @@ class BrowserWebDriver:
 			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
 			headless_mode (bool): Enables or disables headless mode. Defaults to False.
 			mute_audio (bool): Mutes or unmutes audio output in the browser. Defaults to False.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
+			proxy (Optional[Union[str, Sequence[str]]]): Configures proxy settings for the browser. Defaults to None.
 			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to a new WindowRect().
 			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			trio_tokens_limits (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
 		"""
 		
 		if window_rect is None:
@@ -689,6 +1594,7 @@ class BrowserWebDriver:
 		self.set_headless_mode(headless_mode)
 		self.set_user_agent(user_agent)
 		self.set_start_page_url(start_page_url)
+		self.set_trio_tokens_limit(trio_tokens_limits)
 		self._window_rect = window_rect
 	
 	@property
@@ -783,25 +1689,30 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Updates various browser settings after initialization.
+		Updates various browser settings after initialization or selectively.
 
-		This method allows for dynamic updating of browser settings such as
-		DevTools enablement, automation hiding, debugging port, profile directory,
-		headless mode, audio muting, proxy configuration, user agent string, and window rectangle.
+		This method allows for dynamic updating of browser settings. Only the settings
+		provided (not None) will be updated.
 
 		Args:
-			enable_devtools (Optional[bool]): Enables or disables DevTools integration. Defaults to None.
-			hide_automation (Optional[bool]): Sets whether to hide browser automation indicators. Defaults to None.
-			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Enables or disables headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Mutes or unmutes audio output in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Configures proxy settings for the browser. Defaults to None.
-			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
-			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Enable/disable DevTools integration. Defaults to None (no change).
+			hide_automation (Optional[bool]): Set whether to hide browser automation indicators. Defaults to None (no change).
+			debugging_port (Optional[int]): Specify a debugging port. Defaults to None (no change initially, but see note below).
+			profile_dir (Optional[str]): Set the browser profile directory. Defaults to None (no change).
+			headless_mode (Optional[bool]): Enable/disable headless mode. Defaults to None (no change).
+			mute_audio (Optional[bool]): Mute/unmute audio output. Defaults to None (no change).
+			proxy (Optional[Union[str, Sequence[str]]]): Configure proxy settings. Defaults to None (no change).
+			user_agent (Optional[str]): Set a custom user agent string. Defaults to None (no change).
+			window_rect (Optional[WindowRect]): Update the window rectangle settings. Defaults to None (no change).
+			start_page_url (Optional[str]): Set the start page URL. Defaults to None (no change).
+			trio_tokens_limits (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
+
+		Note:
+			The debugging port is ultimately determined by `find_debugging_port`, which might use
+			the provided `debugging_port` and `profile_dir` values.
 		"""
 		
 		if enable_devtools is not None:
@@ -831,6 +1742,9 @@ class BrowserWebDriver:
 		if start_page_url is not None:
 			self.set_start_page_url(start_page_url)
 		
+		if trio_tokens_limits is not None:
+			self.set_trio_tokens_limit(trio_tokens_limits)
+		
 		self.set_debugging_port(self.find_debugging_port(debugging_port, profile_dir))
 	
 	def start_webdriver(
@@ -844,24 +1758,27 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Starts the WebDriver and browser session.
+		Starts the WebDriver service and the browser session.
 
 		Initializes and starts the WebDriver instance and the associated browser process.
-		It first updates settings based on provided parameters, checks if a WebDriver instance is already active,
-		and if not, starts the WebDriver service and then creates a new browser session.
+		It first updates settings based on provided parameters (if the driver is not already running),
+		checks if a WebDriver service process needs to be started, starts it if necessary using Popen,
+		waits for it to become active, and then creates the WebDriver client instance (`self.driver`).
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the browser in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the browser. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. Defaults to None.
-			user_agent (Optional[str]): User agent string to use. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for this start. Defaults to None (use current setting).
+			debugging_port (Optional[int]): Override debugging port for this start. Defaults to None (use current setting).
+			profile_dir (Optional[str]): Override profile directory for this start. Defaults to None (use current setting).
+			headless_mode (Optional[bool]): Override headless mode for this start. Defaults to None (use current setting).
+			mute_audio (Optional[bool]): Override audio muting for this start. Defaults to None (use current setting).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for this start. Defaults to None (use current setting).
+			user_agent (Optional[str]): Override user agent for this start. Defaults to None (use current setting).
+			window_rect (Optional[WindowRect]): Override window rectangle for this start. Defaults to None (use current setting).
+			start_page_url (Optional[str]): Override start page URL for this start. Defaults to None (use current setting).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
 		"""
 		
 		if self.driver is None:
@@ -875,6 +1792,7 @@ class BrowserWebDriver:
 					user_agent=user_agent,
 					window_rect=window_rect,
 					start_page_url=start_page_url,
+					trio_tokens_limits=trio_tokens_limits,
 			)
 		
 			self._is_active = self.check_webdriver_active()
@@ -921,24 +1839,27 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
+			trio_tokens_limits: Optional[Union[int, math.inf]] = None,
 	):
 		"""
-		Restarts the WebDriver and browser session.
+		Restarts the WebDriver and browser session gracefully.
 
-		Performs a complete restart of the WebDriver and browser. It first closes the existing WebDriver
-		and browser session using `close_webdriver`, and then starts a new session using `start_webdriver`
-		with the provided or current settings. This is useful for resetting the browser state between tests or operations.
+		Performs a clean restart by first closing the existing WebDriver session and browser
+		(using `close_webdriver`), and then initiating a new session (using `start_webdriver`)
+		with potentially updated settings. If settings arguments are provided, they override
+		the existing settings for the new session; otherwise, the current settings are used.
 
 		Args:
-			enable_devtools (Optional[bool]): Whether to enable DevTools integration for the new session. Defaults to None.
-			debugging_port (Optional[int]): Debugging port number for the new browser session. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory for the new session. Defaults to None.
-			headless_mode (Optional[bool]): Whether to start the new browser session in headless mode. Defaults to None.
-			mute_audio (Optional[bool]): Whether to mute audio in the new browser session. Defaults to None.
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses for the new session. Defaults to None.
-			user_agent (Optional[str]): User agent string to use for the new session. Defaults to None.
-			window_rect (Optional[WindowRect]): Initial window rectangle settings for the new session. Defaults to None.
-			start_page_url (Optional[str]): Sets the start page URL for the browser. Defaults to None.
+			enable_devtools (Optional[bool]): Override DevTools setting for the new session. Defaults to None (use current).
+			debugging_port (Optional[int]): Override debugging port for the new session. Defaults to None (use current).
+			profile_dir (Optional[str]): Override profile directory for the new session. Defaults to None (use current).
+			headless_mode (Optional[bool]): Override headless mode for the new session. Defaults to None (use current).
+			mute_audio (Optional[bool]): Override audio muting for the new session. Defaults to None (use current).
+			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for the new session. Defaults to None (use current).
+			user_agent (Optional[str]): Override user agent for the new session. Defaults to None (use current).
+			window_rect (Optional[WindowRect]): Override window rectangle for the new session. Defaults to None (use current).
+			start_page_url (Optional[str]): Override start page URL for the new session. Defaults to None (use current).
+			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
 		"""
 		
 		self.close_webdriver()
@@ -954,84 +1875,112 @@ class BrowserWebDriver:
 				user_agent=user_agent,
 				window_rect=window_rect,
 				start_page_url=start_page_url,
+				trio_tokens_limits=trio_tokens_limits,
 		)
 	
-	def scroll_by_amount(self, x: int = 0, y: int = 0, duration: int = 250):
+	def scroll_by_amount_action(
+			self,
+			delta_x: int,
+			delta_y: int,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
 		"""
-		Scrolls the viewport by a specified amount.
+		Adds a scroll action to the current mouse position by the specified amounts.
 
-		Performs a scroll action in the browser viewport by a given amount in pixels, both horizontally and vertically.
-		This is useful for scrolling the page programmatically to bring different parts of the content into view.
-
-		Args:
-			x (int): Horizontal scroll amount in pixels. Positive values scroll right, negative values scroll left. Defaults to 0 (no horizontal scroll).
-			y (int): Vertical scroll amount in pixels. Positive values scroll down, negative values scroll up. Defaults to 0 (no vertical scroll).
-			duration (int): Duration of the scroll animation in milliseconds. Defaults to 250ms.
-		"""
-		
-		ActionChains(driver=self.driver, duration=duration).scroll_by_amount(x, y).perform()
-	
-	def scroll_down_of_element(self, element: WebElement, duration: int = 250):
-		"""
-		Scrolls down within a specific web element by half of its height.
-
-		Simulates scrolling down inside a given WebElement. It moves the mouse to the element and then scrolls vertically by an amount equal to half the element's height. This is useful for bringing content within a scrollable element into view.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
 
 		Args:
-			element (WebElement): The WebElement object representing the element to scroll within. This element should be scrollable.
-			duration (int): Duration of the scroll animation in milliseconds. Defaults to 250ms.
+			delta_x (int): The amount to scroll horizontally. Positive scrolls right, negative scrolls left.
+			delta_y (int): The amount to scroll vertically. Positive scrolls down, negative scrolls up.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the scroll action added, allowing for method chaining.
 		"""
 		
-		ActionChains(driver=self.driver, duration=duration).move_to_element_with_offset(element, xoffset=0, yoffset=element.size["height"] // 2).perform()
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.scroll_by_amount(delta_x=delta_x, delta_y=delta_y)
+		
+		return action_chain
 	
-	def scroll_from_origin(
+	def scroll_from_origin_action(
 			self,
 			origin: ScrollOrigin,
-			x: int = 0,
-			y: int = 0,
-			duration: int = 250
-	):
+			delta_x: int,
+			delta_y: int,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
 		"""
-		Scrolls from a specific origin by a specified amount.
+		Adds a scroll action relative to a specified origin (viewport or element center).
 
-		Scrolls the viewport relative to a specified origin point. The origin can be the viewport itself
-		or a specific web element. This offers more control over the starting point of the scroll action.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
 
 		Args:
-			origin (ScrollOrigin): The scroll origin, which can be the viewport or a specific element (e.g., `ScrollOrigin.viewport`, `ScrollOrigin.element`).
-			x (int): Horizontal scroll amount in pixels from the origin. Defaults to 0.
-			y (int): Vertical scroll amount in pixels from the origin. Defaults to 0.
-			duration (int): Duration of the scroll animation in milliseconds. Defaults to 250ms.
+			origin (ScrollOrigin): The origin point for the scroll. This object defines
+				whether the scroll is relative to the viewport or an element's center.
+				Use `ScrollOrigin.from_viewport()` or `ScrollOrigin.from_element()`.
+			delta_x (int): The horizontal scroll amount. Positive scrolls right, negative left.
+			delta_y (int): The vertical scroll amount. Positive scrolls down, negative up.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the scroll action added, allowing for method chaining.
 		"""
 		
-		ActionChains(driver=self.driver, duration=duration).scroll_from_origin(origin, x, y).perform()
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.scroll_from_origin(scroll_origin=origin, delta_x=delta_x, delta_y=delta_y)
+		
+		return action_chain
 	
-	def scroll_to_element(self, element: WebElement, duration: int = 250):
+	def scroll_to_element_action(
+			self,
+			element: WebElement,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
 		"""
-		Scrolls an element into view.
+		Adds an action to scroll the viewport until the specified element is in view.
 
-		Programmatically scrolls the webpage to bring a specific web element into the visible viewport.
-		This is useful for ensuring that an element is visible before interacting with it, especially if it's initially off-screen.
-
-		Args:
-			element (WebElement): The element to scroll into view.
-			duration (int): Duration of the scroll animation in milliseconds. Defaults to 250ms.
-		"""
-		
-		ActionChains(driver=self.driver, duration=duration).scroll_to_element(element).perform()
-	
-	def scroll_up_of_element(self, element: WebElement, duration: int = 250):
-		"""
-		Scrolls up within a specific web element by half of its height.
-
-		This method simulates scrolling up inside a given WebElement. It moves the mouse to the element and then scrolls vertically upwards by an amount equal to half the element's height. This is useful for bringing content within a scrollable element into view.
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
 
 		Args:
-			element (WebElement): The WebElement object representing the element to scroll within. This element should be scrollable.
-			duration (int): Duration of the scroll animation in milliseconds. Defaults to 250ms.
+			element (WebElement): The target web element to scroll into view.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the scroll-to-element action added, allowing for method chaining.
 		"""
 		
-		ActionChains(driver=self.driver, duration=duration).move_to_element_with_offset(element, xoffset=0, yoffset=-(element.size["height"] // 2)).perform()
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.scroll_to_element(element)
+		
+		return action_chain
 	
 	def search_url(
 			self,
@@ -1052,6 +2001,72 @@ class BrowserWebDriver:
 		
 		self.update_times(temp_implicitly_wait, temp_page_load_timeout)
 		self.driver.get(url)
+	
+	def send_keys_action(
+			self,
+			keys_to_send: str,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a send keys action to the currently focused element.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			keys_to_send (str): The sequence of keys to send.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the send keys action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.send_keys(keys_to_send)
+		
+		return action_chain
+	
+	def send_keys_to_element_action(
+			self,
+			element: WebElement,
+			keys_to_send: str,
+			duration: int = 250,
+			action_chain: Optional[ActionChains] = None
+	) -> ActionChains:
+		"""
+		Adds a send keys action specifically to the provided web element.
+
+		If an existing ActionChains object is provided via `action_chain`, this action
+		is appended to it. Otherwise, a new ActionChains object is created using
+		`self.build_action_chains` with the specified duration before adding the action.
+
+		Args:
+			element (WebElement): The target web element to send keys to.
+			keys_to_send (str): The sequence of keys to send.
+			duration (int): The duration in milliseconds to use when creating a new
+				ActionChains instance if `action_chain` is None. Defaults to 250.
+			action_chain (Optional[ActionChains]): An existing ActionChains instance to append
+				this action to. If None, a new chain is created. Defaults to None.
+
+		Returns:
+			ActionChains: The ActionChains instance (either the one passed in or a new one)
+				with the send keys to element action added, allowing for method chaining.
+		"""
+		
+		if action_chain is None:
+			action_chain = self.build_action_chains(duration=duration)
+		
+		action_chain.send_keys_to_element(element, keys_to_send)
+		
+		return action_chain
 	
 	def set_window_rect(self, rect: WindowRect):
 		"""
@@ -1090,7 +2105,7 @@ class BrowserWebDriver:
 		
 		self.driver.switch_to.frame(frame)
 	
-	def to_wrapper(self):
+	def to_wrapper(self) -> "TrioBrowserWebDriverWrapper":
 		"""
 		Creates a TrioBrowserWebDriverWrapper instance for asynchronous operations with Trio.
 
@@ -1102,85 +2117,71 @@ class BrowserWebDriver:
 			TrioBrowserWebDriverWrapper: A TrioBrowserWebDriverWrapper instance wrapping this BrowserWebDriver.
 		"""
 		
-		return TrioBrowserWebDriverWrapper(webdriver_=self)
-	
-	@property
-	def window(self) -> str:
-		"""
-		Gets the current window handle.
-
-		Retrieves the handle of the currently active browser window or tab. Window handles are unique identifiers
-		used by WebDriver to distinguish between different browser windows.
-
-		Returns:
-			str: The current window handle.
-		"""
-		
-		return self.driver.current_window_handle
-	
-	@property
-	def windows_names(self) -> list[str]:
-		"""
-		Gets the handles of all open windows.
-
-		Returns a list of handles for all browser windows or tabs currently open and managed by the WebDriver.
-		This is useful for iterating through or managing multiple windows in a browser session.
-
-		Returns:
-		   list[str]: A list of window handles. Each handle is a string identifier for an open window.
-		"""
-		
-		return self.driver.window_handles
+		return TrioBrowserWebDriverWrapper(_webdriver=self)
 
 
 class TrioBrowserWebDriverWrapper:
 	"""
-	Wraps BrowserWebDriver for asynchronous execution in Trio.
+	Wraps BrowserWebDriver methods for asynchronous execution using Trio.
 
-	This class provides a wrapper around BrowserWebDriver to make its methods compatible with Trio's
-	asynchronous execution model. It uses `trio.to_thread.run_sync` to execute WebDriver commands
-	in separate threads, preventing them from blocking the Trio event loop.
+	This class acts as a proxy to a `BrowserWebDriver` instance. It intercepts
+	method calls and executes them in a separate thread using `trio.to_thread.run_sync`,
+	allowing synchronous WebDriver operations to be called from asynchronous Trio code
+	without blocking the event loop. Properties and non-callable attributes are accessed directly.
 
 	Attributes:
-		_webdriver (BrowserWebDriver): The BrowserWebDriver instance being wrapped.
+		_webdriver (BrowserWebDriver): The underlying synchronous BrowserWebDriver instance.
+		_excluding_functions (Sequence[str]): A list of attribute names on the wrapped object
+											  that should *not* be accessible through this wrapper,
+											  typically because they are irrelevant or dangerous
+											  in an async context handled by the wrapper.
 	"""
 	
-	def __init__(self, webdriver_: BrowserWebDriver):
+	def __init__(self, _webdriver: BrowserWebDriver):
 		"""
 		Initializes the TrioBrowserWebDriverWrapper.
 
 		Args:
-			webdriver_ (BrowserWebDriver): The BrowserWebDriver instance to wrap.
+			_webdriver (BrowserWebDriver): The BrowserWebDriver instance to wrap.
 		"""
 		
-		self._webdriver = webdriver_
+		self._webdriver = _webdriver
+		self._excluding_functions = ["to_wrapper"]
 	
-	def __getattr__(self, name):
+	def __getattr__(self, name) -> Any:
 		"""
-		Overrides attribute access to run BrowserWebDriver methods asynchronously.
+		Intercepts attribute access to wrap callable methods for asynchronous execution.
 
-		This method is a special Python method that gets called when an attribute is accessed that
-		doesn't exist on the `TrioBrowserWebDriverWrapper` instance itself. In this case, it's used to intercept
-		calls to methods of the wrapped `BrowserWebDriver` instance and execute them in a non-blocking way
-		using `trio.to_thread.run_sync`. This ensures that WebDriver operations, which are inherently synchronous,
-		do not block the asynchronous Trio event loop.
+		When an attribute (method or property) is accessed on this wrapper:
+		1. Checks if the attribute name is in the `_excluding_functions` list. If so, raises AttributeError.
+		2. Retrieves the attribute from the underlying `_webdriver` object.
+		3. If the attribute is callable (i.e., a method), it returns a new asynchronous
+		   function (`wrapped`). When this `wrapped` function is called (`await wrapper.some_method()`),
+		   it executes the original synchronous method (`attr`) in a separate thread managed by Trio,
+		   using `trio.to_thread.run_sync` and applying the capacity limiter from the wrapped object.
+		4. If the attribute is not callable (e.g., a property), it returns the attribute's value directly.
 
 		Args:
 			name (str): The name of the attribute being accessed.
 
 		Returns:
-			Any: If the attribute is a method of `BrowserWebDriver`, returns a wrapped asynchronous version of the method.
-				 If the attribute is a property, returns the property directly from `BrowserWebDriver`.
+			Any: Either an asynchronous wrapper function (awaitable) for a method, or the direct value
+				 of a property or non-callable attribute from the underlying `_webdriver` instance.
+
+		Raises:
+			AttributeError: If the attribute `name` is listed in `_excluding_functions` or
+							if it does not exist on the underlying `_webdriver` object.
 		"""
 		
-		if name in ["to_wrapper"]:
+		if name in self._excluding_functions:
 			raise AttributeError(f"Don't use {name} method in TrioBrowserWebDriverWrapper!")
 		else:
 			attr = getattr(self._webdriver, name)
 		
 			if callable(attr):
 				def wrapped(*args, **kwargs):
-					return trio.to_thread.run_sync(attr, *args, **kwargs)
+					func_with_kwargs = partial(attr, **kwargs)
+					return trio.to_thread.run_sync(func_with_kwargs, *args, limiter=self._webdriver.trio_capacity_limiter)
 		
 				return wrapped
 		
