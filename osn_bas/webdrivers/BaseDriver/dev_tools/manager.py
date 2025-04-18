@@ -215,22 +215,25 @@ class DevTools:
 	
 	async def _run_event_listener(self, cdp_session: CdpSession, event_type: str, event_name: str):
 		"""
-		Runs an event listener for a specific DevTools event.
+		Runs an asynchronous event listener loop for a specific DevTools event.
 
-		This method sets up and runs a listener for a particular DevTools event. It retrieves handler settings,
-		gets the handler function, and then enters a loop to receive and process events as they occur, handling potential exceptions.
+		Sets up a listener on the provided CDP session for the specified event type and name.
+		It retrieves the associated handler settings and the handler function from internal state.
+		It then continuously receives events from the CDP session's channel and passes them
+		to the handler function for processing. The loop continues until cancelled or
+		the channel is closed. Exceptions during event processing are caught and logged.
 
 		Args:
-			cdp_session (CdpSession): The CDP session object to use for listening to events.
-			event_type (str): The type of DevTools event domain (e.g., "fetch").
-			event_name (str): The name of the specific event to listen for (e.g., "request_paused").
+			cdp_session (CdpSession): The Chrome DevTools Protocol session object to listen to events from.
+			event_type (str): The domain of the DevTools event (e.g., "fetch", "log", "network").
+			event_name (str): The specific name of the event within the domain (e.g., "requestPaused", "entryAdded").
 		"""
 		
 		handler_settings = self._callbacks_settings[event_type][event_name]
 		handler = self._get_handler_to_use(event_type, event_name)
 		
 		class_to_use = self._get_devtools_object(handler_settings["class_to_use_path"])
-		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(class_to_use)
+		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(class_to_use, buffer_size=handler_settings["listen_buffer_size"])
 		
 		while True:
 			try:
@@ -500,45 +503,87 @@ class DevTools:
 	
 	def set_request_paused_handler(
 			self,
+			listen_buffer_size: int,
 			post_data_instances: Optional[Any] = None,
 			headers_instances: Optional[dict[str, fetch.HeaderInstance]] = None,
 			post_data_handler: Optional[fetch.post_data_handler_type] = None,
 			headers_handler: Optional[fetch.headers_handler_type] = None
 	):
 		"""
-		Sets up a handler for 'fetch.requestPaused' events to modify network requests.
+		Sets up a handler for 'fetch.requestPaused' DevTools events to intercept and modify network requests.
 
-		Configures DevTools to intercept network requests and pause them when they match certain criteria.
-		This allows for dynamic modification of request post data and headers before the request is continued.
-		It uses handler settings to define how requests are modified and processed.
+		Configures the Chrome DevTools Protocol's Fetch domain to intercept network requests
+		that the browser is about to send. When a request is paused, the configured handler
+		settings and custom handler functions are used to potentially inspect or modify
+		the request's post data and headers before allowing the request to continue.
 
 		Args:
-			post_data_instances (Optional[Any]): Instances to match against request post data for interception. Defaults to None.
-			headers_instances (Optional[dict[str, fetch.HeaderInstance]]): dictionary of header instances to modify.
-				Keys are header names, and values are HeaderInstance objects defining the modification. Defaults to None.
-			post_data_handler (Optional[fetch.post_data_handler_type]):
-				Custom handler function for processing and modifying request post data. If None, a default handler is used. Defaults to None.
-			headers_handler (Optional[fetch.headers_handler_type]):
-				Custom handler function for processing and modifying request headers. If None, a default handler is used. Defaults to None.
+			listen_buffer_size (int): The size of the buffer for the Trio channel that will
+				listen for incoming 'fetch.requestPaused' events.
+			post_data_instances (Optional[Any]): Optional data structure(s) used to match against
+				the request's post data. If provided, the handler might only process requests
+				whose post data matches one of these instances, depending on the custom handler logic.
+				Defaults to None (no post data matching required by settings).
+			headers_instances (Optional[dict[str, HeaderInstance]]): Optional dictionary defining
+				header modifications based on predefined instructions. Keys are header names, and
+				values are `HeaderInstance` objects specifying how to modify the header (e.g., set, remove).
+				These instances are passed to the `headers_handler`. Defaults to None (no instance-based header modifications).
+			post_data_handler (Optional[post_data_handler_type]): A custom callable (function or method)
+				to process and modify the request's post data. This function receives the handler settings
+				and the event object. If None, a default handler (likely a passthrough or basic processor)
+				is used. Defaults to None.
+			headers_handler (Optional[headers_handler_type]): A custom callable (function or method)
+				to process and modify the request's headers. This function receives the handler settings,
+				the DevTools header entry class, and the event object. If None, a default handler
+				(likely one that applies `headers_instances`) is used. Defaults to None.
+
+		Returns:
+			None: This method configures the handler but does not return a value.
 
 		Usage
 		______
-		from osn_bas.webdrivers.BaseDriver.dev_tools.fetch import HeaderInstance
+		# Assume 'driver' is an instance of BrowserWebDriver or similar
+		# Assume 'fetch' module and its types (HeaderInstance, post_data_handler_type, etc.) are imported
 
-		async def modify_headers(handler_settings, event):
-			# Custom header modification logic
-			return fetch.default_headers_handler(handler_settings, fetch.HeaderEntry, event)
+		# Define a custom header handler function (must be awaitable if running in Trio)
+		async def modify_headers_example(handler_settings: RequestPausedHandlerSettings, HeaderEntry: type, event: Any):
+			print(f"Intercepted request for URL: {event.request.url}")
+			# Example: Modify the User-Agent header using the default logic with instances
+			modified_headers = fetch.default_headers_handler(handler_settings, HeaderEntry, event)
 
+			# Example: Add/modify another header manually
+			found = False
+			for header in modified_headers:
+				 if header['name'].lower() == 'x-my-trace-id':
+					  header['value'] = 'new-trace-value'
+					  found = True
+					  break
+			if not found:
+				 modified_headers.append({'name': 'X-My-Trace-Id', 'value': 'initial-trace'})
+
+			return modified_headers
+
+		# Define header instances
 		headers_to_set = {
-			"Custom-Header": HeaderInstance(value="custom_value", instruction="set")
+			"User-Agent": HeaderInstance(value="MyAutomatedClient/1.0", instruction="set")
 		}
 
+		# Activate DevTools context and set the handler
+		# The DevTools context managers (async with) handle enabling/disabling the CDP domain.
 		async with driver.dev_tools as dev_tools:
-			driver.dev_tools.set_request_paused_handler(
-				headers_instances=headers_to_set,
-				headers_handler=modify_headers
+			# Set up the handler for request pausing
+			dev_tools.set_request_paused_handler(
+				listen_buffer_size=20, # Important for async event loop
+				headers_instances=headers_to_set, # Provide instance configs
+				headers_handler=modify_headers_example # Provide custom handler function
 			)
-			await driver.search_url("example.com")
+			print("Request paused handler set. Navigating...")
+			# Perform actions that will trigger network requests
+			await driver.search_url("https://example.com/some_api")
+			# Keep the context alive while waiting for events if needed
+			await trio.sleep(5) # Example: Wait for requests to happen
+
+		print("DevTools context exited.")
 		"""
 		
 		self._set_handler_settings(
@@ -546,6 +591,7 @@ class DevTools:
 				event_name="request_paused",
 				settings_type=fetch.RequestPausedHandlerSettings,
 				class_to_use_path="fetch.RequestPaused",
+				listen_buffer_size=listen_buffer_size,
 				post_data_instances=post_data_instances,
 				headers_instances=headers_instances,
 				post_data_handler=fetch.default_post_data_handler

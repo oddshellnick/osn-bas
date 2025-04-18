@@ -33,27 +33,40 @@ class HeaderInstance(TypedDict):
 
 class RequestPausedHandlerSettings(TypedDict):
 	"""
-	Settings for handling 'fetch.requestPaused' events.
+	Configuration settings for handling Chrome DevTools Protocol 'fetch.requestPaused' events.
 
-	This TypedDict defines the configuration structure for handling 'fetch.requestPaused' events from DevTools.
-	It includes settings for matching instances in post data, header modifications, and custom handler functions for post data and headers.
+	This TypedDict defines the structure for configuring how intercepted network requests
+	(paused via the Fetch domain) should be handled. It allows specifying conditions for handling
+	(matching post data), modifications to make (headers), and custom logic to apply (handlers).
 
 	Attributes:
-		class_to_use_path (str): Path to the class in the DevTools API representing the 'RequestPaused' event.
-			Used internally to correctly identify and process 'requestPaused' events.
-		post_data_instances (Optional[Any]): Optional instances to match against request post data.
-			If provided, the handler will only be triggered for requests whose post data matches one of these instances.
-		headers_instances (Optional[dict[str, HeaderInstance]]): Optional dictionary of header modification instructions.
-			Keys are header names, and values are `HeaderInstance` objects specifying how to modify each header.
-		post_data_handler (post_data_handler_type): Handler function for processing request post data.
-			This function is called when a 'requestPaused' event is intercepted, allowing for custom logic to modify the post data.
-			It should take `RequestPausedHandlerSettings` and the event object as arguments and return the modified post data as a string or None.
-		headers_handler (headers_handler_type): Handler function for processing request headers.
-			Similar to `post_data_handler`, but for headers. It takes `RequestPausedHandlerSettings`, the header entry class from DevTools API,
-			and the event object, and should return a list of modified header entries.
+		class_to_use_path (str): The import path (e.g., 'selenium.webdriver.common.devtools.v125.fetch.RequestPaused')
+								 to the specific DevTools event class this handler targets.
+								 Used internally to route events correctly.
+		listen_buffer_size (int): The size of the buffer for the Trio channel listening for these events.
+		post_data_instances (Optional[Any]): Data structure(s) to match against the request's post data.
+											 If provided and not None, the handlers will only be triggered
+											 if the request's post data matches one of these instances. The
+											 exact matching logic depends on the implementation using these settings.
+											 Defaults to None (handle all requests regardless of post data).
+		headers_instances (Optional[dict[str, HeaderInstance]]): Configuration for modifying request headers.
+																 Keys are header names (e.g., 'User-Agent').
+																 Values are `HeaderInstance` objects defining the
+																 modification (e.g., set, remove). Defaults to None (no header modifications).
+		post_data_handler (post_data_handler_type): A callable (function or method) responsible for potentially
+													modifying the request's post data. It receives the handler
+													settings and the `fetch.RequestPaused` event object as arguments.
+													It should return the modified post data (as a string) or None if no modification is needed.
+		headers_handler (headers_handler_type): A callable (function or method) responsible for potentially
+												modifying the request's headers. It receives the handler settings,
+												the CDP header entry class (e.g., `fetch.HeaderEntry`), and the
+												`fetch.RequestPaused` event object. It should return a list of
+												header dictionaries (e.g., `[{'name': '...', 'value': '...'}]`)
+												representing the final headers for the request.
 	"""
 	
 	class_to_use_path: str
+	listen_buffer_size: int
 	post_data_instances: Optional[Any]
 	headers_instances: Optional[dict[str, HeaderInstance]]
 	post_data_handler: "post_data_handler_type"
