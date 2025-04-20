@@ -167,7 +167,7 @@ class DevTools:
 			async with self._new_session_manager(target_id) as new_session:
 				await self._start_listeners(new_session)
 				await self._exit_event.wait()
-		except trio.Cancelled:
+		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 	
 	def _get_devtools_object(self, path: str) -> Any:
@@ -240,7 +240,7 @@ class DevTools:
 				event = await receiver_channel.receive()
 		
 				if handler:
-					await handler(cdp_session, handler_settings, event)
+					self._nursery_object.start_soon(handler, cdp_session, handler_settings, event)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):
@@ -404,34 +404,43 @@ class DevTools:
 			event: Any
 	):
 		"""
-		Handles the 'fetch.requestPaused' event from CDP.
+		Processes a 'fetch.requestPaused' event received from the DevTools Protocol.
 
-		This method is invoked when the DevTools detects a paused network request that matches the configured fetch criteria.
-		It processes the request based on the provided handler settings, which may include modifying headers or post data before continuing the request.
+		This internal method is executed by the event listener loop whenever a 'fetch.requestPaused'
+		event occurs and is routed to this handler. It applies the configured `post_data_handler`
+		and `headers_handler` from the `handler_settings` to modify the request, handling cases
+		where the handlers might return awaitable results. Finally, it instructs the browser
+		to continue the request with the (potentially) modified parameters using `fetch.continue_request`.
+		Errors occurring during the handler execution or the continue request are caught
+		and passed to the `on_error` callable defined in the handler settings.
 
 		Args:
 			cdp_session (CdpSession): The CDP session object used to communicate with the browser's DevTools.
-			handler_settings (fetch.RequestPausedHandlerSettings): Configuration settings for handling the 'requestPaused' event,
-				including handlers for post data and headers modification.
+			handler_settings (fetch.RequestPausedHandlerSettings): Configuration settings for this specific
+				'requestPaused' handler, including the callable handlers and the error handler.
 			event (Any): The 'fetch.requestPaused' event object containing details about the paused request.
+						 Expected to be an instance of the class specified by `handler_settings["class_to_use_path"]`.
 		"""
 		
 		post_data_result = handler_settings["post_data_handler"](handler_settings, event)
 		headers_result = handler_settings["headers_handler"](handler_settings, self._get_devtools_object("fetch.HeaderEntry"), event)
 		
-		await cdp_session.execute(
-				self._get_devtools_object("fetch.continue_request")(
-						request_id=event.request_id,
-						url=event.request.url,
-						method=event.request.method,
-						post_data=post_data_result
-						if not isinstance(post_data_result, Awaitable)
-						else await post_data_result,
-						headers=headers_result
-						if not isinstance(headers_result, Awaitable)
-						else await headers_result,
-				)
-		)
+		try:
+			await cdp_session.execute(
+					self._get_devtools_object("fetch.continue_request")(
+							request_id=event.request_id,
+							url=event.request.url,
+							method=event.request.method,
+							post_data=post_data_result
+							if not isinstance(post_data_result, Awaitable)
+							else await post_data_result,
+							headers=headers_result
+							if not isinstance(headers_result, Awaitable)
+							else await headers_result,
+					)
+			)
+		except (Exception,) as error:
+			handler_settings["on_error"](self, event, error)
 	
 	@property
 	def is_active(self) -> bool:
@@ -519,23 +528,22 @@ class DevTools:
 
 		Args:
 			listen_buffer_size (int): The size of the buffer for the Trio channel that will
-				listen for incoming 'fetch.requestPaused' events.
+				listen for incoming 'fetch.requestPaused' events. Defaults to 50.
 			post_data_instances (Optional[Any]): Optional data structure(s) used to match against
 				the request's post data. If provided, the handler might only process requests
 				whose post data matches one of these instances, depending on the custom handler logic.
 				Defaults to None (no post data matching required by settings).
-			headers_instances (Optional[dict[str, HeaderInstance]]): Optional dictionary defining
+			headers_instances (Optional[Dict[str, fetch.HeaderInstance]]): Optional dictionary defining
 				header modifications based on predefined instructions. Keys are header names, and
 				values are `HeaderInstance` objects specifying how to modify the header (e.g., set, remove).
 				These instances are passed to the `headers_handler`. Defaults to None (no instance-based header modifications).
-			post_data_handler (Optional[post_data_handler_type]): A custom callable (function or method)
+			post_data_handler (Optional[fetch.post_data_handler_type]): A custom callable (function or method)
 				to process and modify the request's post data. This function receives the handler settings
-				and the event object. If None, a default handler (likely a passthrough or basic processor)
-				is used. Defaults to None.
-			headers_handler (Optional[headers_handler_type]): A custom callable (function or method)
+				and the event object. If None, `fetch.default_post_data_handler` is used. Defaults to None.
+			headers_handler (Optional[fetch.headers_handler_type]): A custom callable (function or method)
 				to process and modify the request's headers. This function receives the handler settings,
-				the DevTools header entry class, and the event object. If None, a default handler
-				(likely one that applies `headers_instances`) is used. Defaults to None.
+				the DevTools header entry class, and the event object. If None, `fetch.default_headers_handler`
+				is used. Defaults to None.
 		"""
 		
 		self._set_handler_settings(
@@ -551,5 +559,6 @@ class DevTools:
 				else post_data_handler,
 				headers_handler=fetch.default_headers_handler
 				if headers_handler is None
-				else headers_handler
+				else headers_handler,
+				on_error=fetch.default_on_error
 		)
