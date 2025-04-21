@@ -1,14 +1,20 @@
 import base64
+import logging
 from typing import (
 	Any,
 	Awaitable,
 	Callable,
 	Literal,
 	Optional,
+	TYPE_CHECKING,
 	TypeVar,
 	TypedDict,
 	Union
 )
+
+
+if TYPE_CHECKING:
+	from osn_bas.webdrivers.BaseDriver.dev_tools.manager import DevTools
 
 
 class HeaderInstance(TypedDict):
@@ -33,31 +39,49 @@ class HeaderInstance(TypedDict):
 
 class RequestPausedHandlerSettings(TypedDict):
 	"""
-	Settings for handling 'fetch.requestPaused' events.
+	Configuration settings for handling Chrome DevTools Protocol 'fetch.requestPaused' events.
 
-	This TypedDict defines the configuration structure for handling 'fetch.requestPaused' events from DevTools.
-	It includes settings for matching instances in post data, header modifications, and custom handler functions for post data and headers.
+	This TypedDict defines the structure for configuring how intercepted network requests
+	(paused via the Fetch domain) should be handled. It allows specifying conditions for handling
+	(matching post data), modifications to make (headers), and custom logic to apply (handlers),
+	as well as how to handle errors during processing.
 
 	Attributes:
-		class_to_use_path (str): Path to the class in the DevTools API representing the 'RequestPaused' event.
-			Used internally to correctly identify and process 'requestPaused' events.
-		post_data_instances (Optional[Any]): Optional instances to match against request post data.
-			If provided, the handler will only be triggered for requests whose post data matches one of these instances.
-		headers_instances (Optional[dict[str, HeaderInstance]]): Optional dictionary of header modification instructions.
-			Keys are header names, and values are `HeaderInstance` objects specifying how to modify each header.
-		post_data_handler (post_data_handler_type): Handler function for processing request post data.
-			This function is called when a 'requestPaused' event is intercepted, allowing for custom logic to modify the post data.
-			It should take `RequestPausedHandlerSettings` and the event object as arguments and return the modified post data as a string or None.
-		headers_handler (headers_handler_type): Handler function for processing request headers.
-			Similar to `post_data_handler`, but for headers. It takes `RequestPausedHandlerSettings`, the header entry class from DevTools API,
-			and the event object, and should return a list of modified header entries.
+		class_to_use_path (str): The import path (e.g., 'selenium.webdriver.common.devtools.v125.fetch.RequestPaused')
+								 to the specific DevTools event class this handler targets.
+								 Used internally to route events correctly.
+		listen_buffer_size (int): The size of the buffer for the Trio channel listening for these events.
+								  Determines how many pending events can be queued before blocking.
+		post_data_instances (Optional[Any]): Data structure(s) to match against the request's post data.
+											 If provided and not None, the handlers might only be triggered
+											 if the request's post data matches one of these instances,
+											 depending on the custom handler logic. Defaults to None.
+		headers_instances (Optional[Dict[str, HeaderInstance]]): Configuration for modifying request headers
+																 based on predefined instructions. Keys are header names,
+																 and values are `HeaderInstance` objects defining the modification.
+																 Defaults to None.
+		post_data_handler (post_data_handler_type): A callable (function or method) responsible for potentially
+													modifying the request's post data. It receives the handler
+													settings and the `fetch.RequestPaused` event object.
+													It should return the modified post data (as a string) or None.
+		headers_handler (headers_handler_type): A callable (function or method) responsible for potentially
+												modifying the request's headers. It receives the handler settings,
+												the CDP header entry class (e.g., `fetch.HeaderEntry`), and the
+												`fetch.RequestPaused` event object. It should return a list of
+												header dictionaries representing the final headers.
+		on_error (on_error_type): A callable (function or method) that is invoked when an error
+								  occurs within the `post_data_handler` or `headers_handler`
+								  while processing an event. It receives the `DevTools` instance,
+								  the event object, and the exception raised.
 	"""
 	
 	class_to_use_path: str
+	listen_buffer_size: int
 	post_data_instances: Optional[Any]
 	headers_instances: Optional[dict[str, HeaderInstance]]
 	post_data_handler: "post_data_handler_type"
 	headers_handler: "headers_handler_type"
+	on_error: "on_error_type"
 
 
 def default_post_data_handler(handler_settings: RequestPausedHandlerSettings, event: Any) -> Optional[str]:
@@ -80,6 +104,24 @@ def default_post_data_handler(handler_settings: RequestPausedHandlerSettings, ev
 		return post_data
 	
 	return base64.b64encode(event.request.post_data.encode()).decode()
+
+
+def default_on_error(self: "DevTools", event: Any, error: Exception) -> None:
+	"""
+	Default error handler for DevTools event listeners.
+
+	This handler simply logs the caught exception at the ERROR level using the standard
+	Python `logging` module. It does not prevent the listener loop from continuing
+	to process subsequent events.
+
+	Args:
+		self (DevTools): The instance of the DevTools class managing the event.
+		event (Any): The event object (or related context) that was being processed when the error occurred.
+					 Could be a CDP event object like `fetch.RequestPaused`.
+		error (Exception): The exception instance that was raised during event processing.
+	"""
+	
+	logging.log(logging.ERROR, error)
 
 
 def default_headers_handler(
@@ -139,4 +181,5 @@ headers_handler_type = Callable[
 	[RequestPausedHandlerSettings, type, Any],
 	Union[list[Any], Awaitable[list[Any]]]
 ]
+on_error_type = Callable[["DevTools", Any, Exception], None]
 header_entry_type = TypeVar("header_entry_type")

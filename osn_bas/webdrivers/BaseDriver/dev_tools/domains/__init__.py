@@ -42,4 +42,4 @@ class CallbacksSettings(TypedDict):
 	fetch: Fetch
 
 
-special_keys = ["use", "enable_func_path", "disable_func_path"]
+_special_keys = ["use", "enable_func_path", "disable_func_path"]

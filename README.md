@@ -264,7 +264,7 @@ trio.run(test_devtools_interception,)
     *   `__init__.py`: Defines `CallbacksSettings (TypedDict)` and `Fetch (TypedDict)` for structuring DevTools settings.
     *   `fetch.py`: Contains specifics for the Fetch domain.
         *   `HeaderInstance (TypedDict)`: Defines how to modify a specific header.
-        *   `RequestPausedHandlerSettings (TypedDict)`: Structure for configuring `fetch.requestPaused` handling.
+        *   `RequestPausedHandlerSettings (TypedDict)`: Structure for configuring `fetch.requestPaused` handling, including event class path, buffer size, data/header instances, custom handlers (`post_data_handler`, `headers_handler`), and an `on_error` callback for handling exceptions during processing or request continuation.
         *   `default_post_data_handler(...)`: Default logic for handling post data.
         *   `default_headers_handler(...)`: Default logic for modifying headers based on `HeaderInstance` instructions.
 *   `errors.py`:

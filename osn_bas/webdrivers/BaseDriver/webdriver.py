@@ -1412,7 +1412,7 @@ class BrowserWebDriver:
 		"""
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
-
+	
 	def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, float]):
 		"""
 		Updates the total number of tokens for the Trio capacity limiter.
@@ -1487,7 +1487,7 @@ class BrowserWebDriver:
 			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. If a list is provided, a proxy will be randomly chosen from the list.
 				If None, proxy settings are removed.
 		"""
-
+		
 		# self._webdriver_start_args.proxy_server = proxy
 		self._webdriver_options_manager.set_proxy(proxy)
 	
@@ -1558,7 +1558,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: str = "",
-			trio_tokens_limits: Union[int, float] = 40
+			trio_tokens_limits: Union[int, float] = 40,
 	):
 		"""
 		Resets all configurable browser settings to their default or specified values.
@@ -1689,7 +1689,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None
+			trio_tokens_limits: Optional[Union[int, float]] = None,
 	):
 		"""
 		Updates various browser settings after initialization or selectively.
@@ -1758,7 +1758,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None
+			trio_tokens_limits: Optional[Union[int, float]] = None,
 	):
 		"""
 		Starts the WebDriver service and the browser session.
@@ -1839,7 +1839,7 @@ class BrowserWebDriver:
 			user_agent: Optional[str] = None,
 			window_rect: Optional[WindowRect] = None,
 			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None
+			trio_tokens_limits: Optional[Union[int, float]] = None,
 	):
 		"""
 		Restarts the WebDriver and browser session gracefully.

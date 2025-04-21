@@ -3,7 +3,11 @@ import logging
 import warnings
 import traceback
 import functools
-from typing import Callable, Literal
+from typing import (
+	Any,
+	Callable,
+	Literal
+)
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	WrongHandlerSettingsError,
 	WrongHandlerSettingsTypeError
@@ -39,25 +43,34 @@ def warn_if_active(func: Callable) -> Callable:
 	return wrapper
 
 
-def validate_handler_settings(handler_settings: dict) -> Literal["class", "function"]:
+def validate_handler_settings(handler_settings: dict[str, Any]) -> Literal["class", "function"]:
 	"""
-	Validates the structure of event handler settings.
+	Validates the structure and necessary keys of event handler settings.
 
-	This function checks if the provided dictionary of handler settings is correctly structured.
-	It ensures that the settings are a dictionary and contains exactly one of the required keys:
-	'class_to_use_path' or 'function_to_use_path'. If the settings are invalid, it raises a specific exception.
+	This function checks if the provided dictionary of handler settings is correctly structured
+	for defining either a class-based or function-based event handler. It ensures that:
+
+	1. The input is a dictionary (or mapping).
+	2. It contains exactly one of the keys 'class_to_use_path' or 'function_to_use_path' with a non-None value.
+	3. It contains the key 'listen_buffer_size'.
 
 	Args:
-		handler_settings (dict): The dictionary containing event handler settings to be validated.
+		handler_settings (dict[str, Any]): The dictionary containing event handler settings to validate.
+											  Expected keys depend on the handler type, but must include
+											  'listen_buffer_size' and exactly one of 'class_to_use_path'
+											  or 'function_to_use_path'.
 
 	Returns:
-		Literal["class", "function"]:
-			- "class" if 'class_to_use_path' key is present.
-			- "function" if 'function_to_use_path' key is present.
+		Literal["class", "function"]: Indicates the type of handler configuration identified:
+
+			- "class" if 'class_to_use_path' key is present and valid according to the checks.
+			- "function" if 'function_to_use_path' key is present and valid according to the checks.
 
 	Raises:
-		WrongHandlerSettingsTypeError: If the handler_settings is not a dictionary.
-		WrongHandlerSettingsError: If the handler_settings does not contain exactly one of the required keys.
+		WrongHandlerSettingsTypeError: If `handler_settings` is not a dictionary or mapping-like object.
+		WrongHandlerSettingsError: If `handler_settings` does not contain exactly one of the keys
+								   'class_to_use_path' or 'function_to_use_path' with a non-None value.
+		AttributeError: If the `handler_settings` dictionary is missing the required 'listen_buffer_size' key.
 	"""
 	
 	if not isinstance(handler_settings, dict):
@@ -66,6 +79,9 @@ def validate_handler_settings(handler_settings: dict) -> Literal["class", "funct
 	one_of_keys = ["class_to_use_path", "function_to_use_path"]
 	if sum(1 for key in one_of_keys if handler_settings.get(key, None) is not None) != 1:
 		raise WrongHandlerSettingsError(handler_settings, one_of_keys)
+	
+	if "listen_buffer_size" not in handler_settings:
+		raise AttributeError("Handler settings must contain 'listen_buffer_size' key.")
 	
 	if "class_to_use_path" in handler_settings:
 		return "class"
