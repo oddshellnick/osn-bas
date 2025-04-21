@@ -29,7 +29,7 @@ from typing import (
 from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
 	CallbacksSettings,
 	Fetch,
-	special_keys
+	_special_keys
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools._utils import (
 	log_on_error,
@@ -107,20 +107,20 @@ class DevTools:
 			await cdp_session.execute(self._get_devtools_object("target.set_discover_targets")(True))
 			self._nursery_object.start_soon(self._process_new_targets, cdp_session)
 		
-			for event_type, event_type_config in self._callbacks_settings.items():
-				if event_type_config["use"]:
-					if event_type_config.get("enable_func_path", None) is not None:
-						await cdp_session.execute(self._get_devtools_object(event_type_config["enable_func_path"])())
+			for domain_name, domain_config in self._callbacks_settings.items():
+				if domain_config["use"]:
+					if domain_config.get("enable_func_path", None) is not None:
+						await cdp_session.execute(self._get_devtools_object(domain_config["enable_func_path"])())
 		
-					for event_name, handler_settings in event_type_config.items():
-						if event_name not in special_keys and handler_settings is not None:
-							handler_type = validate_handler_settings(handler_settings)
+					for event_name, event_config in domain_config.items():
+						if event_name not in _special_keys and event_config is not None:
+							handler_type = validate_handler_settings(event_config)
 		
 							if handler_type == "class":
-								self._nursery_object.start_soon(self._run_event_listener, cdp_session, event_type, event_name)
+								self._nursery_object.start_soon(self._run_event_listener, cdp_session, domain_name, event_name)
 		
 			await trio.sleep(0.0)
-		except trio.Cancelled:
+		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 	
 	async def _process_new_targets(self, cdp_session: CdpSession):
