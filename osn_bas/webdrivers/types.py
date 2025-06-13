@@ -1,4 +1,7 @@
-from typing import Literal, TypedDict
+from typing import (
+	Literal,
+	TypedDict
+)
 
 
 class _MoveStep:
@@ -38,26 +41,6 @@ class _MoveStep:
 		return f"MoveStep(amplitude_x={self.amplitude_x}, amplitude_y={self.amplitude_y})"
 
 
-class WebdriverOption(TypedDict):
-	"""
-	Type definition for WebDriver option configuration.
-
-	This TypedDict defines the structure for configuring WebDriver options,
-	allowing to specify the name, command, and type of option to be set for a browser instance.
-
-	Attributes:
-	   name (str): The name of the option, used as an identifier within the options manager.
-	   command (str): The actual command or option string that WebDriver understands.
-	   type (Literal["normal", "experimental", "attribute", None]): Specifies the type of WebDriver option.
-			Can be "normal" for standard arguments, "experimental" for experimental options,
-			"attribute" for setting browser attributes directly, or None if the option type is not applicable.
-	"""
-	
-	name: str
-	command: str
-	type: Literal["normal", "experimental", "attribute", None]
-
-
 class TextInputPart:
 	"""
 	Represents a segment of text input with an associated duration.
@@ -91,7 +74,7 @@ class TextInputPart:
 	def __str__(self) -> str:
 		"""Returns a user-friendly string representation."""
 		
-		return f"TextInputPart(text={self.text!r}, duration={self.duration})" # Added !r for clarity
+		return f"TextInputPart(text={self.text}, duration={self.duration})"
 
 
 class ScrollDelta:
@@ -330,3 +313,11 @@ class JS_Scripts(TypedDict):
 	get_viewport_size: str
 	stop_window_loading: str
 	open_new_tab: str
+
+
+AutoplayPolicyType = Literal["user-gesture-required", "no-user-gesture-required"]
+ValidAutoplayPolicies = ["user-gesture-required", "no-user-gesture-required"]
+LogLevelType = Literal[0, 1, 2, 3]
+ValidLogLevels = [0, 1, 2, 3]
+UseGLType = Literal["desktop", "egl", "swiftshader"]
+ValidUseGLs = ["desktop", "egl", "swiftshader"]

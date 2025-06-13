@@ -1,10 +1,12 @@
+import re
+import sys
 import trio
 import pathlib
+import warnings
 from random import random
 from subprocess import Popen
 from functools import partial
 from selenium import webdriver
-from typing import Any, Optional, Union
 from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains
 from osn_bas.webdrivers.types import ActionPoint
@@ -12,7 +14,13 @@ from selenium.webdriver.remote.webelement import WebElement
 from osn_windows_cmd.taskkill.parameters import TaskKillTypes
 from selenium.webdriver.common.actions.key_input import KeyInput
 from osn_bas.webdrivers.BaseDriver.dev_tools.manager import DevTools
-from osn_bas.webdrivers.BaseDriver.start_args import BrowserStartArgs
+from typing import (
+	Any,
+	Callable,
+	Optional,
+	TypedDict,
+	Union
+)
 from osn_windows_cmd.taskkill import (
 	ProcessID,
 	taskkill_windows
@@ -25,16 +33,14 @@ from osn_bas.types import (
 )
 from selenium.webdriver.common.actions.pointer_input import PointerInput
 from selenium.webdriver.remote.remote_connection import RemoteConnection
-from osn_bas.webdrivers.BaseDriver.options import (
-	BrowserOptionsManager
-)
 from selenium.webdriver.common.actions.wheel_input import (
 	ScrollOrigin,
 	WheelInput
 )
 from osn_windows_cmd.netstat import (
 	get_localhost_minimum_free_port,
-	get_localhost_processes_with_pids
+	get_localhost_pids_with_addresses,
+	get_localhost_pids_with_ports
 )
 from osn_bas.webdrivers._functions import (
 	find_browser_previous_session,
@@ -43,52 +49,55 @@ from osn_bas.webdrivers._functions import (
 	scroll_to_parts,
 	text_input_to_parts
 )
+from osn_bas.webdrivers.BaseDriver.flags import (
+	BlinkArguments,
+	BlinkExperimentalOptions,
+	BlinkFlags,
+	BlinkFlagsManager,
+	BrowserFlags,
+	BrowserFlagsManager
+)
+
+
+class CaptchaWorkerSettings(TypedDict):
+	name: str
+	check_func: Callable[["BrowserWebDriver"], bool]
+	solve_func: Callable[["BrowserWebDriver"], None]
 
 
 class BrowserWebDriver:
 	"""
-	Manages a browser session using Selenium WebDriver.
+	A base class for managing a Selenium WebDriver instance and its associated browser process.
 
-	This class provides an interface to control a web browser using Selenium WebDriver.
-	It supports various browser configurations, including headless mode, proxy settings,
-	user agent manipulation, and DevTools integration. It also handles browser and
-	WebDriver lifecycle, including startup, shutdown, and session management.
+	This class provides a common interface for starting, stopping, restarting, and configuring
+	a browser session. It handles the lifecycle of the WebDriver and browser, manages browser flags,
+	and sets up basic configurations like timeouts and window size. It is intended to be subclassed
+	for specific browsers (e.g., Chrome, Firefox).
 
 	Attributes:
-		_window_rect (WindowRect): Initial window rectangle settings.
-		_js_scripts (JS_Scripts): Collection of JavaScript scripts for browser interaction.
-		_browser_exe (Union[str, pathlib.Path]): Path to the browser executable.
-		_webdriver_path (str): Path to the WebDriver executable.
-		_webdriver_start_args (BrowserStartArgs): Manages WebDriver startup arguments.
-		_webdriver_options_manager (BrowserOptionsManager): Manages browser options.
-		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]):
-			Selenium WebDriver instance. Initialized to None before driver creation.
-		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
-		_base_page_load_timeout (int): Base page load timeout for page loading operations.
-		_is_active (bool): Indicates if the WebDriver instance is currently active.
-		trio_capacity_limiter (trio.CapacityLimiter): Trio capacity limiter for controlling concurrent operations.
-		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
+		_window_rect (Optional[WindowRect]): The window size and position settings.
+		_js_scripts (dict[str, str]): A dictionary of pre-loaded JavaScript scripts.
+		_webdriver_path (str): The file path to the WebDriver executable.
+		_webdriver_flags_manager (Union[BrowserFlagsManager, BlinkFlagsManager]): The manager for browser flags and options.
+		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]): The active Selenium WebDriver instance.
+		_base_implicitly_wait (int): The default implicit wait time in seconds.
+		_base_page_load_timeout (int): The default page load timeout in seconds.
+		_captcha_workers (list[CaptchaWorkerSettings]): A list of configured captcha worker settings.
+		_is_active (bool): A flag indicating if the browser process is active.
+		trio_capacity_limiter (trio.CapacityLimiter): A capacity limiter for controlling concurrent async operations.
+		dev_tools (DevTools): An interface for interacting with the browser's DevTools protocol.
 	"""
 	
 	def __init__(
 			self,
-			browser_exe: Union[str, pathlib.Path],
 			webdriver_path: str,
-			enable_devtools: bool,
-			webdriver_start_args: type,
-			webdriver_options_manager: type,
-			hide_automation: bool = False,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: bool = False,
-			mute_audio: bool = False,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags_manager_type: type = BrowserFlagsManager,
+			flags: Optional[Union[BrowserFlags, dict[str, Any]]] = None,
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: str = "",
 			trio_tokens_limit: Union[int, float] = 40,
+			captcha_workers: Optional[list[CaptchaWorkerSettings]] = None,
 	):
 		"""
 		Initializes the BrowserWebDriver instance.
@@ -97,54 +106,31 @@ class BrowserWebDriver:
 		settings for browser executable path, WebDriver path, and various browser options.
 
 		Args:
-			browser_exe (Union[str, pathlib.Path]): Path to the browser executable.
 			webdriver_path (str): Path to the WebDriver executable.
-			enable_devtools (bool): Enables or disables DevTools integration.
-			webdriver_start_args (type[BrowserStartArgs]): Class for managing WebDriver startup arguments.
-			webdriver_options_manager (type[BrowserOptionsManager]): Class for managing browser options.
-			hide_automation (bool): Hides automation indicators in the browser. Defaults to False.
-			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory. Defaults to None.
-			headless_mode (bool): Runs the browser in headless mode if True. Defaults to False.
-			mute_audio (bool): Mutes audio output in the browser. Defaults to False.
-			proxy (Optional[Union[str, list[str]]]): Proxy settings for the browser. Can be a single proxy string or a list. Defaults to None.
-			user_agent (Optional[str]): Custom user agent string for the browser. Defaults to None.
+			flags_manager_type (Type[BrowserFlagsManager]): Class for managing browser options.
+			flags (Optional[Union[BrowserFlags, dict[str, Any]]]): A dictionary of flags to initialize the browser with.
 			implicitly_wait (int): Base implicit wait time for WebDriver element searches. Defaults to 5 seconds.
 			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5 seconds.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to a default WindowRect instance if None.
-			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
-			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Use math.inf for unlimited. Defaults to 40.
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Use float('inf') for unlimited. Defaults to 40.
+			captcha_workers (Optional[list[CaptchaWorkerSettings]]): A list of configured captcha worker settings.
 		"""
-		
-		if window_rect is None:
-			window_rect = WindowRect()
 		
 		self._window_rect = window_rect
 		self._js_scripts = read_js_scripts()
-		self._browser_exe = browser_exe
 		self._webdriver_path = webdriver_path
-		
-		self._webdriver_start_args: BrowserStartArgs = webdriver_start_args(browser_exe=browser_exe)
-		
-		self._webdriver_options_manager: BrowserOptionsManager = webdriver_options_manager()
+		self._webdriver_flags_manager: Union[BrowserFlagsManager, BlinkFlagsManager] = flags_manager_type()
 		self.driver: Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]] = None
 		self._base_implicitly_wait = implicitly_wait
 		self._base_page_load_timeout = page_load_timeout
+		
+		self._captcha_workers = captcha_workers if captcha_workers is not None else []
+		
 		self._is_active = False
 		self.trio_capacity_limiter = trio.CapacityLimiter(trio_tokens_limit)
 		self.dev_tools = DevTools(self)
 		
-		self.update_settings(
-				enable_devtools=enable_devtools,
-				hide_automation=hide_automation,
-				debugging_port=debugging_port,
-				profile_dir=profile_dir,
-				headless_mode=headless_mode,
-				mute_audio=mute_audio,
-				proxy=proxy,
-				user_agent=user_agent,
-				start_page_url=start_page_url,
-		)
+		self.update_settings(flags=flags)
 	
 	def build_action_chains(
 			self,
@@ -563,6 +549,37 @@ class BrowserWebDriver:
 			action.send_keys(part.text)
 		
 		return action
+	
+	@property
+	def captcha_workers(self) -> list[CaptchaWorkerSettings]:
+		"""
+		Gets the current list of configured captcha workers.
+
+		Returns:
+			list[CaptchaWorkerSettings]: A list containing the current captcha worker settings.
+		"""
+		
+		return self._captcha_workers
+	
+	def check_captcha(self) -> Optional[str]:
+		"""
+		Checks if a captcha is present using registered captcha workers and attempts to solve the first one detected.
+
+		It iterates through the configured captcha workers, executing each worker's check function.
+		If a check function returns True, indicating a captcha is present, the corresponding
+		solve function is called, and the name of the worker is returned.
+
+		Returns:
+			Optional[str]: The name of the captcha worker that successfully solved the captcha,
+						   or None if no captcha was detected by any worker.
+		"""
+		
+		for captcha_worker in self._captcha_workers:
+			if captcha_worker["check_func"](self):
+				captcha_worker["solve_func"](self)
+				return captcha_worker["name"]
+		
+		return None
 	
 	def check_element_in_viewport(self, element: WebElement) -> bool:
 		"""
@@ -1124,7 +1141,7 @@ class BrowserWebDriver:
 		
 		return self.execute_js_script(self._js_scripts["get_element_css"], element)
 	
-	def get_vars_for_remote(self) -> tuple[RemoteConnection, str]:
+	def get_vars_for_remote(self) -> RemoteConnection:
 		"""
 		Gets variables necessary to create a remote WebDriver instance.
 
@@ -1133,10 +1150,10 @@ class BrowserWebDriver:
 		for example, in a distributed testing environment.
 
 		Returns:
-			tuple[RemoteConnection, str]: A tuple containing the command executor (for establishing connection) and session ID (for session identification).
+			RemoteConnection: The command executor (for establishing connection).
 		"""
 		
-		return self.driver.command_executor, self.driver.session_id
+		return self.driver.command_executor
 	
 	def get_viewport_position(self) -> Position:
 		"""
@@ -1166,20 +1183,6 @@ class BrowserWebDriver:
 		"""
 		
 		return self.driver.page_source
-	
-	@property
-	def is_active(self) -> bool:
-		"""
-		Checks if the WebDriver instance is currently active and connected.
-
-		This property provides a way to determine the current status of the WebDriver.
-		It reflects whether the WebDriver is initialized and considered operational.
-
-		Returns:
-			bool: True if the WebDriver is active, False otherwise.
-		"""
-		
-		return self._is_active
 	
 	def key_down_action(
 			self,
@@ -1396,22 +1399,36 @@ class BrowserWebDriver:
 		
 		return action_chain
 	
-	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
+	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection]):
 		"""
 		Connects to an existing remote WebDriver session.
 
-		This method establishes a connection to a remote Selenium WebDriver server and reuses an existing browser session, instead of creating a new one.
-		It's useful when you want to attach to an already running browser instance, managed by a remote WebDriver service like Selenium Grid or cloud-based Selenium providers.
+		This method establishes a connection to a remote Selenium WebDriver server and reuses an existing browser session of Browser.
+		It allows you to control a browser instance that is already running remotely, given the command executor URL and session ID of that session.
 
 		Args:
 			command_executor (Union[str, RemoteConnection]): The URL of the remote WebDriver server or a `RemoteConnection` object.
-			session_id (str): The ID of the existing WebDriver session to connect to.
-
-		Raises:
-			NotImplementedError: This function must be implemented in child classes.
 		"""
 		
-		raise NotImplementedError("This function must be implemented in child classes.")
+		self.driver = webdriver.Remote(
+				command_executor=command_executor,
+				options=self._webdriver_flags_manager.options
+		)
+		
+		self.set_driver_timeouts(
+				page_load_timeout=self._base_page_load_timeout,
+				implicit_wait_timeout=self._base_implicitly_wait
+		)
+	
+	def remove_captcha_worker(self, captcha_worker: CaptchaWorkerSettings):
+		"""
+		Removes a captcha worker configuration from the list of workers.
+
+		Args:
+			captcha_worker (CaptchaWorkerSettings): The captcha worker settings to remove.
+		"""
+		
+		self._captcha_workers.remove(captcha_worker)
 	
 	def set_trio_tokens_limit(self, trio_tokens_limit: Union[int, float]):
 		"""
@@ -1423,194 +1440,54 @@ class BrowserWebDriver:
 		
 		self.trio_capacity_limiter.total_tokens = trio_tokens_limit
 	
-	def set_start_page_url(self, start_page_url: str):
+	@property
+	def is_active(self) -> bool:
 		"""
-		Sets the URL that the WebDriver will navigate to upon starting.
+		Checks if the WebDriver instance is currently active and connected.
 
-		Updates an internal configuration attribute (`_webdriver_start_args.start_page_url`)
-		which is presumably used during WebDriver initialization.
+		This property provides a way to determine the current status of the WebDriver.
+		It reflects whether the WebDriver is initialized and considered operational.
 
-		Args:
-			start_page_url (str): The absolute URL for the browser to load initially.
-		"""
-		
-		self._webdriver_start_args.start_page_url = start_page_url
-	
-	def set_user_agent(self, user_agent: Optional[str]):
-		"""
-		Sets the user agent.
-
-		Configures the browser to use a specific user agent string. Overriding the default user agent
-		can be useful for testing website behavior under different browser or device conditions, or for privacy purposes.
-
-		Args:
-			user_agent (Optional[str]): User agent string to use. If None, the user agent setting is removed, reverting to the browser's default.
+		Returns:
+			bool: True if the WebDriver is active, False otherwise.
 		"""
 		
-		self._webdriver_start_args.user_agent = user_agent
-	
-	def set_headless_mode(self, headless_mode: bool):
-		"""
-		Sets headless mode.
-
-		Enables or disables headless browsing. In headless mode, the browser runs in the background without a visible UI.
-		This is often used for automated testing and scraping to save resources and improve performance.
-
-		Args:
-			headless_mode (bool): Whether to start the browser in headless mode. True for headless, False for visible browser UI.
-		"""
-		
-		self._webdriver_start_args.headless_mode = headless_mode
-	
-	def set_mute_audio(self, mute_audio: bool):
-		"""
-		Sets mute audio mode.
-
-		Configures the browser to mute or unmute audio output. Muting audio can be useful in automated testing
-		environments to prevent sound from interfering with tests or to conserve system resources.
-
-		Args:
-			mute_audio (bool): Whether to mute audio in the browser. True to mute, False to unmute.
-		"""
-		
-		self._webdriver_start_args.mute_audio = mute_audio
-	
-	def set_proxy(self, proxy: Optional[Union[str, list[str]]]):
-		"""
-		Sets the proxy.
-
-		Configures the browser to use a proxy server for network requests. This can be a single proxy server or a list
-		of proxy servers, from which one will be randomly selected for use. Proxies are used to route browser traffic
-		through an intermediary server, often for anonymity, security, or accessing geo-restricted content.
-
-		Args:
-			proxy (Optional[Union[str, list[str]]]): Proxy server address or list of addresses. If a list is provided, a proxy will be randomly chosen from the list.
-				If None, proxy settings are removed.
-		"""
-		
-		# self._webdriver_start_args.proxy_server = proxy
-		self._webdriver_options_manager.set_proxy(proxy)
-	
-	def set_profile_dir(self, profile_dir: Optional[str]):
-		"""
-		Sets the profile directory.
-
-		Specifies a custom browser profile directory to be used by the browser instance. Browser profiles store user-specific
-		data such as bookmarks, history, cookies, and extensions. Using profiles allows for persistent browser settings
-		across sessions and can be useful for testing with specific browser states.
-
-		Args:
-			profile_dir (Optional[str]): Path to the browser profile directory. If None, a default or temporary profile is used.
-		"""
-		
-		self._webdriver_start_args.profile_dir = profile_dir
-	
-	def set_debugging_port(self, debugging_port: Optional[int]):
-		"""
-		Sets the debugging port.
-
-		Configures the browser to start with a specific debugging port. This port is used for external tools,
-		like debuggers or browser automation frameworks, to connect to and control the browser instance.
-		Setting a fixed debugging port can be useful for consistent remote debugging or automation setups.
-
-		Args:
-			debugging_port (Optional[int]): Debugging port number. If None, the browser chooses a port automatically.
-		"""
-		
-		self._webdriver_start_args.debugging_port = debugging_port
-		self._webdriver_options_manager.set_debugger_address(debugging_port)
-	
-	def hide_automation(self, hide: bool):
-		"""
-		Sets whether to hide browser automation indicators.
-
-		This method configures the browser options to hide or show automation
-		indicators, which are typically present when a browser is controlled by WebDriver.
-
-		Args:
-			hide (bool): If True, hides automation indicators; otherwise, shows them.
-		"""
-		
-		self._webdriver_options_manager.hide_automation(hide)
-	
-	def set_enable_devtools(self, enable_devtools: bool):
-		"""
-		Enables or disables the BiDi protocol for DevTools.
-
-		Controls whether the BiDi (Bidirectional) protocol is enabled for communication with browser developer tools.
-		Enabling DevTools allows for advanced browser interaction, network interception, and performance analysis.
-
-		Args:
-			enable_devtools (bool): True to enable DevTools, False to disable.
-		"""
-		
-		self._webdriver_options_manager.set_enable_bidi(enable_devtools)
+		return self._is_active
 	
 	def reset_settings(
 			self,
-			enable_devtools: bool,
-			hide_automation: bool = False,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: bool = False,
-			mute_audio: bool = False,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags: Optional[BrowserFlags] = None,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: str = "",
-			trio_tokens_limits: Union[int, float] = 40,
+			trio_tokens_limit: Union[int, float] = 40,
 	):
 		"""
 		Resets all configurable browser settings to their default or specified values.
 
 		This method resets various browser settings to the provided values. If no value
 		is provided for certain settings, they are reset to their default states.
-		This includes DevTools, automation hiding, debugging port, profile directory,
-		proxy, audio muting, headless mode, user agent, window rectangle, and Trio token limits.
+		This can only be done when the browser is not active.
 
 		Args:
-			enable_devtools (bool): Enables or disables DevTools integration.
-			hide_automation (bool): Sets whether to hide browser automation indicators. Defaults to False.
-			debugging_port (Optional[int]): Specifies the debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Sets the browser profile directory. Defaults to None.
-			headless_mode (bool): Enables or disables headless mode. Defaults to False.
-			mute_audio (bool): Mutes or unmutes audio output in the browser. Defaults to False.
-			proxy (Optional[Union[str, Sequence[str]]]): Configures proxy settings for the browser. Defaults to None.
-			user_agent (Optional[str]): Sets a custom user agent string for the browser. Defaults to None.
+			flags (Optional[BrowserFlags]): A dictionary of flags to apply. If provided, existing flags are cleared and replaced. If None, all flags are cleared.
 			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to a new WindowRect().
-			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
-			trio_tokens_limits (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
 		"""
 		
-		if window_rect is None:
-			window_rect = WindowRect()
+		if not self.is_active:
+			if window_rect is None:
+				window_rect = WindowRect()
 		
-		self.set_enable_devtools(enable_devtools)
-		self.hide_automation(hide_automation)
-		self.set_debugging_port(debugging_port)
-		self.set_profile_dir(profile_dir)
-		self.set_proxy(proxy)
-		self.set_mute_audio(mute_audio)
-		self.set_headless_mode(headless_mode)
-		self.set_user_agent(user_agent)
-		self.set_start_page_url(start_page_url)
-		self.set_trio_tokens_limit(trio_tokens_limits)
-		self._window_rect = window_rect
+			if flags is not None:
+				self._webdriver_flags_manager.set_flags(flags)
+			else:
+				self._webdriver_flags_manager.clear_flags()
+		
+			self.set_trio_tokens_limit(trio_tokens_limit)
+			self._window_rect = window_rect
+		else:
+			warnings.warn("Browser is already running.")
 	
-	@property
-	def debugging_port(self) -> Optional[int]:
-		"""
-		Gets the currently set debugging port.
-
-		Retrieves the debugging port number that the browser instance is configured to use.
-
-		Returns:
-			Optional[int]: The debugging port number, or None if not set.
-		"""
-		
-		return self._webdriver_start_args.debugging_port
-	
-	def create_driver(self):
+	def _create_driver(self):
 		"""
 		Abstract method to create a WebDriver instance. Must be implemented in child classes.
 
@@ -1623,73 +1500,11 @@ class BrowserWebDriver:
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
-	def check_webdriver_active(self) -> bool:
-		"""
-		Checks if the WebDriver is active by verifying if the debugging port is in use.
-
-		Determines if a WebDriver instance is currently running and active by checking if the configured
-		debugging port is in use by any process. This is a way to verify if a browser session is active
-		without directly querying the WebDriver itself.
-
-		Returns:
-			bool: True if the WebDriver is active (debugging port is in use), False otherwise.
-		"""
-		
-		if any(
-				ports == [self.debugging_port]
-				for pid, ports in get_localhost_processes_with_pids().items()
-		):
-			return True
-		else:
-			return False
-	
-	def find_debugging_port(self, debugging_port: Optional[int], profile_dir: Optional[str]) -> int:
-		"""
-		Finds an appropriate debugging port, either reusing a previous session's port or finding a free port.
-
-		Attempts to locate a suitable debugging port for the browser. It first tries to reuse a debugging port
-		from a previous browser session if a profile directory is specified and a previous session is found.
-		If no previous session is found or if no profile directory is specified, it attempts to use the provided
-		`debugging_port` if available, or finds a minimum free port if no port is provided or the provided port is in use.
-
-		Args:
-			debugging_port (Optional[int]): Requested debugging port number. If provided, the method attempts to use this port. Defaults to None.
-			profile_dir (Optional[str]): Profile directory path. If provided, the method checks for previous sessions using this profile. Defaults to None.
-
-		Returns:
-			int: The debugging port number to use. This is either a reused port from a previous session, the provided port if available, or a newly found free port.
-		"""
-		
-		previous_session = find_browser_previous_session(
-				self._browser_exe,
-				self._webdriver_start_args.profile_dir_command_line,
-				profile_dir
-		)
-		
-		if previous_session is not None:
-			return previous_session
-		
-		if debugging_port is not None:
-			return get_localhost_minimum_free_port(debugging_port)
-		
-		if self.debugging_port is None:
-			return get_localhost_minimum_free_port()
-		
-		return self.debugging_port
-	
 	def update_settings(
 			self,
-			enable_devtools: Optional[bool] = None,
-			hide_automation: Optional[bool] = None,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags: Optional[BrowserFlags] = None,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
 	):
 		"""
 		Updates various browser settings after initialization or selectively.
@@ -1698,112 +1513,47 @@ class BrowserWebDriver:
 		provided (not None) will be updated.
 
 		Args:
-			enable_devtools (Optional[bool]): Enable/disable DevTools integration. Defaults to None (no change).
-			hide_automation (Optional[bool]): Set whether to hide browser automation indicators. Defaults to None (no change).
-			debugging_port (Optional[int]): Specify a debugging port. Defaults to None (no change initially, but see note below).
-			profile_dir (Optional[str]): Set the browser profile directory. Defaults to None (no change).
-			headless_mode (Optional[bool]): Enable/disable headless mode. Defaults to None (no change).
-			mute_audio (Optional[bool]): Mute/unmute audio output. Defaults to None (no change).
-			proxy (Optional[Union[str, Sequence[str]]]): Configure proxy settings. Defaults to None (no change).
-			user_agent (Optional[str]): Set a custom user agent string. Defaults to None (no change).
+			flags (Optional[BrowserFlags]): A dictionary of flags to update. Existing flags will be overwritten, others remain.
 			window_rect (Optional[WindowRect]): Update the window rectangle settings. Defaults to None (no change).
-			start_page_url (Optional[str]): Set the start page URL. Defaults to None (no change).
-			trio_tokens_limits (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
-
-		Note:
-			The debugging port is ultimately determined by `find_debugging_port`, which might use
-			the provided `debugging_port` and `profile_dir` values.
+			trio_tokens_limit (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
 		"""
 		
-		if enable_devtools is not None:
-			self.set_enable_devtools(enable_devtools)
-		
-		if hide_automation is not None:
-			self.hide_automation(hide_automation)
-		
-		if profile_dir is not None:
-			self.set_profile_dir(profile_dir)
-		
-		if proxy is not None:
-			self.set_proxy(proxy)
-		
-		if mute_audio is not None:
-			self.set_mute_audio(mute_audio)
-		
-		if headless_mode is not None:
-			self.set_headless_mode(headless_mode)
-		
-		if user_agent is not None:
-			self.set_user_agent(user_agent)
+		if flags is not None:
+			self._webdriver_flags_manager.update_flags(flags)
 		
 		if window_rect is not None:
 			self._window_rect = window_rect
 		
-		if start_page_url is not None:
-			self.set_start_page_url(start_page_url)
-		
-		if trio_tokens_limits is not None:
-			self.set_trio_tokens_limit(trio_tokens_limits)
-		
-		self.set_debugging_port(self.find_debugging_port(debugging_port, profile_dir))
+		if trio_tokens_limit is not None:
+			self.set_trio_tokens_limit(trio_tokens_limit)
 	
 	def start_webdriver(
 			self,
-			enable_devtools: Optional[bool] = None,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags: Optional[BrowserFlags] = None,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
 	):
 		"""
 		Starts the WebDriver service and the browser session.
 
 		Initializes and starts the WebDriver instance and the associated browser process.
 		It first updates settings based on provided parameters (if the driver is not already running),
-		checks if a WebDriver service process needs to be started, starts it if necessary using Popen,
-		waits for it to become active, and then creates the WebDriver client instance (`self.driver`).
+		and then creates the WebDriver client instance (`self.driver`).
 
 		Args:
-			enable_devtools (Optional[bool]): Override DevTools setting for this start. Defaults to None (use current setting).
-			debugging_port (Optional[int]): Override debugging port for this start. Defaults to None (use current setting).
-			profile_dir (Optional[str]): Override profile directory for this start. Defaults to None (use current setting).
-			headless_mode (Optional[bool]): Override headless mode for this start. Defaults to None (use current setting).
-			mute_audio (Optional[bool]): Override audio muting for this start. Defaults to None (use current setting).
-			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for this start. Defaults to None (use current setting).
-			user_agent (Optional[str]): Override user agent for this start. Defaults to None (use current setting).
+			flags (Optional[BrowserFlags]): Override flags for this start. Defaults to None (use current settings).
 			window_rect (Optional[WindowRect]): Override window rectangle for this start. Defaults to None (use current setting).
-			start_page_url (Optional[str]): Override start page URL for this start. Defaults to None (use current setting).
-			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
+			trio_tokens_limit (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
 		"""
 		
 		if self.driver is None:
 			self.update_settings(
-					enable_devtools=enable_devtools,
-					debugging_port=debugging_port,
-					profile_dir=profile_dir,
-					headless_mode=headless_mode,
-					mute_audio=mute_audio,
-					proxy=proxy,
-					user_agent=user_agent,
+					flags=flags,
 					window_rect=window_rect,
-					start_page_url=start_page_url,
-					trio_tokens_limits=trio_tokens_limits,
+					trio_tokens_limit=trio_tokens_limit,
 			)
 		
-			self._is_active = self.check_webdriver_active()
-		
-			if not self._is_active:
-				Popen(self._webdriver_start_args.start_command, shell=True)
-		
-				while not self._is_active:
-					self._is_active = self.check_webdriver_active()
-		
-			self.create_driver()
+			self._create_driver()
 	
 	def close_webdriver(self):
 		"""
@@ -1813,33 +1563,15 @@ class BrowserWebDriver:
 		the browser process. This ensures a clean shutdown of the browser and WebDriver environment.
 		"""
 		
-		for pid, ports in get_localhost_processes_with_pids().items():
-			if ports == [self.debugging_port]:
-				taskkill_windows(
-						taskkill_type=TaskKillTypes.forcefully_terminate,
-						selectors=ProcessID(pid)
-				)
-		
-				self._is_active = self.check_webdriver_active()
-		
-				while self._is_active:
-					self._is_active = self.check_webdriver_active()
-		
-		self.driver.quit()
-		self.driver = None
+		if self.driver is not None:
+			self.driver.quit()
+			self.driver = None
 	
 	def restart_webdriver(
 			self,
-			enable_devtools: Optional[bool] = None,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: Optional[bool] = None,
-			mute_audio: Optional[bool] = None,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags: Optional[BrowserFlags] = None,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: Optional[str] = None,
-			trio_tokens_limits: Optional[Union[int, float]] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
 	):
 		"""
 		Restarts the WebDriver and browser session gracefully.
@@ -1850,32 +1582,16 @@ class BrowserWebDriver:
 		the existing settings for the new session; otherwise, the current settings are used.
 
 		Args:
-			enable_devtools (Optional[bool]): Override DevTools setting for the new session. Defaults to None (use current).
-			debugging_port (Optional[int]): Override debugging port for the new session. Defaults to None (use current).
-			profile_dir (Optional[str]): Override profile directory for the new session. Defaults to None (use current).
-			headless_mode (Optional[bool]): Override headless mode for the new session. Defaults to None (use current).
-			mute_audio (Optional[bool]): Override audio muting for the new session. Defaults to None (use current).
-			proxy (Optional[Union[str, Sequence[str]]]): Override proxy setting for the new session. Defaults to None (use current).
-			user_agent (Optional[str]): Override user agent for the new session. Defaults to None (use current).
+			flags (Optional[BrowserFlags]): Override flags for the new session. Defaults to None (use current).
 			window_rect (Optional[WindowRect]): Override window rectangle for the new session. Defaults to None (use current).
-			start_page_url (Optional[str]): Override start page URL for the new session. Defaults to None (use current).
-			trio_tokens_limits (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
+			trio_tokens_limit (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
 		"""
 		
 		self.close_webdriver()
 		self.start_webdriver(
-				enable_devtools=enable_devtools,
-				debugging_port=debugging_port
-				if debugging_port is not None
-				else self.debugging_port,
-				profile_dir=profile_dir,
-				headless_mode=headless_mode,
-				mute_audio=mute_audio,
-				proxy=proxy,
-				user_agent=user_agent,
+				flags=flags,
 				window_rect=window_rect,
-				start_page_url=start_page_url,
-				trio_tokens_limits=trio_tokens_limits,
+				trio_tokens_limit=trio_tokens_limit,
 		)
 	
 	def scroll_by_amount_action(
@@ -2068,6 +1784,16 @@ class BrowserWebDriver:
 		
 		return action_chain
 	
+	def set_captcha_worker(self, captcha_worker: CaptchaWorkerSettings):
+		"""
+		Adds a captcha worker configuration to the list of workers.
+
+		Args:
+			captcha_worker (CaptchaWorkerSettings): The captcha worker settings to add.
+		"""
+		
+		self._captcha_workers.append(captcha_worker)
+	
 	def set_window_rect(self, rect: WindowRect):
 		"""
 		Sets the browser window rectangle.
@@ -2109,7 +1835,7 @@ class BrowserWebDriver:
 		"""
 		Creates a TrioBrowserWebDriverWrapper instance for asynchronous operations with Trio.
 
-		Wraps the BrowserWebDriver instance in a TrioBrowserWebDriverWrapper, which allows for running WebDriver
+		Wraps the ...WebDriver instance in a TrioBrowserWebDriverWrapper, which allows for running WebDriver
 		commands in a non-blocking manner within a Trio asynchronous context. This is essential for
 		integrating Selenium WebDriver with asynchronous frameworks like Trio.
 
@@ -2131,7 +1857,7 @@ class TrioBrowserWebDriverWrapper:
 
 	Attributes:
 		_webdriver (BrowserWebDriver): The underlying synchronous BrowserWebDriver instance.
-		_excluding_functions (Sequence[str]): A list of attribute names on the wrapped object
+		_excluding_functions (list[str]): A list of attribute names on the wrapped object
 											  that should *not* be accessible through this wrapper,
 											  typically because they are irrelevant or dangerous
 											  in an async context handled by the wrapper.
@@ -2146,7 +1872,21 @@ class TrioBrowserWebDriverWrapper:
 		"""
 		
 		self._webdriver = _webdriver
-		self._excluding_functions = ["to_wrapper"]
+		
+		self._excluding_functions = [
+			"to_wrapper",
+			"start_webdriver",
+			"close_webdriver",
+			"restart_webdriver",
+			"update_settings",
+			"reset_settings",
+			"set_start_page_url",
+			"get_vars_for_remote",
+			"remote_connect_driver",
+			"_find_debugging_port",
+			"_check_browser_exe_active",
+			"_set_debugging_port"
+		]
 	
 	def __getattr__(self, name) -> Any:
 		"""
@@ -2186,3 +1926,410 @@ class TrioBrowserWebDriverWrapper:
 				return wrapped
 		
 			return attr
+
+
+class BlinkWebDriver(BrowserWebDriver):
+	"""
+	A WebDriver manager for Blink-based browsers (e.g., Chrome, Edge).
+
+	Extends `BrowserWebDriver` with functionality specific to Blink-based browsers,
+	such as managing the browser executable, handling remote debugging ports, and finding
+	pre-existing browser sessions.
+
+	Attributes:
+		_window_rect (Optional[WindowRect]): The window size and position settings.
+		_js_scripts (dict[str, str]): A dictionary of pre-loaded JavaScript scripts.
+		_webdriver_path (str): The file path to the WebDriver executable.
+		_webdriver_flags_manager (BlinkFlagsManager): The manager for browser flags and options.
+		driver (Optional[Union[webdriver.Chrome, webdriver.Edge]]): The active Selenium WebDriver instance.
+		_base_implicitly_wait (int): The default implicit wait time in seconds.
+		_base_page_load_timeout (int): The default page load timeout in seconds.
+		_captcha_workers (list[CaptchaWorkerSettings]): A list of configured captcha worker settings.
+		_is_active (bool): A flag indicating if the browser process is active.
+		trio_capacity_limiter (trio.CapacityLimiter): A capacity limiter for controlling concurrent async operations.
+		dev_tools (DevTools): An interface for interacting with the browser's DevTools protocol.
+		_console_encoding (str): The encoding of the system console.
+		_ip_pattern (re.Pattern): A compiled regex pattern to match IP addresses and ports.
+	"""
+	
+	def __init__(
+			self,
+			browser_exe: Optional[Union[str, pathlib.Path]],
+			webdriver_path: str,
+			flags_manager_type: type = BlinkFlagsManager,
+			flags: Optional[Union[BlinkFlags, dict[str, Any]]] = None,
+			start_page_url: str = "",
+			implicitly_wait: int = 5,
+			page_load_timeout: int = 5,
+			window_rect: Optional[WindowRect] = None,
+			trio_tokens_limit: Union[int, float] = 40,
+			captcha_workers: Optional[list[CaptchaWorkerSettings]] = None,
+	):
+		"""
+		Initializes the BlinkWebDriver instance.
+
+		Configures and sets up the WebDriver for a Blink-based browser.
+
+		Args:
+			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the browser executable.
+			webdriver_path (str): Path to the WebDriver executable.
+			flags_manager_type (Type[BlinkFlagsManager]): Class for managing browser options.
+			flags (Optional[Union[BlinkFlags, dict[str, Any]]]): A dictionary of flags to initialize the browser with.
+			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			implicitly_wait (int): Base implicit wait time for WebDriver element searches. Defaults to 5 seconds.
+			page_load_timeout (int): Base page load timeout for WebDriver operations. Defaults to 5 seconds.
+			window_rect (Optional[WindowRect]): Initial window rectangle settings. Defaults to a default WindowRect instance if None.
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Use float('inf') for unlimited. Defaults to 40.
+			captcha_workers (Optional[list[CaptchaWorkerSettings]]): A list of configured captcha worker settings.
+		"""
+		
+		self._console_encoding = sys.stdout.encoding
+		self._ip_pattern = re.compile(r"\A(\d+\.\d+\.\d+\.\d+|\[::]):\d+\Z")
+
+		super().__init__(
+				webdriver_path=webdriver_path,
+				flags_manager_type=flags_manager_type,
+				flags=flags,
+				implicitly_wait=implicitly_wait,
+				page_load_timeout=page_load_timeout,
+				window_rect=window_rect,
+				trio_tokens_limit=trio_tokens_limit,
+				captcha_workers=captcha_workers,
+		)
+		
+		self.update_settings(flags=flags, browser_exe=browser_exe, start_page_url=start_page_url,)
+	
+	def set_start_page_url(self, start_page_url: str):
+		"""
+		Sets the URL that the browser will open upon starting.
+
+		Args:
+			start_page_url (str): The URL to set as the start page.
+		"""
+		
+		self._webdriver_flags_manager.start_page_url = start_page_url
+	
+	def reset_settings(
+			self,
+			flags: Optional[Union[BlinkFlags, dict[str, Any]]] = None,
+			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			start_page_url: str = "",
+			window_rect: Optional[WindowRect] = None,
+			trio_tokens_limit: Union[int, float] = 40,
+	):
+		"""
+		Resets all configurable browser settings to their default or specified values.
+
+		This method resets various browser settings to the provided values. If no value
+		is provided for certain settings, they are reset to their default states.
+		This can only be done when the browser is not active.
+
+		Args:
+			flags (Optional[Union[BlinkFlags, dict[str, Any]]]): A dictionary of flags to apply. If provided, existing flags are cleared and replaced. If None, all flags are cleared.
+			browser_exe (Optional[Union[str, pathlib.Path]]): The path to the browser executable.
+			start_page_url (str): The URL to navigate to when the browser starts. Defaults to an empty string.
+			window_rect (Optional[WindowRect]): Updates the window rectangle settings. Defaults to a new WindowRect().
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter. Defaults to 40.
+		"""
+		
+		if not self.is_active:
+			if window_rect is None:
+				window_rect = WindowRect()
+		
+			if flags is not None:
+				self._webdriver_flags_manager.set_flags(flags)
+			else:
+				self._webdriver_flags_manager.clear_flags()
+		
+			self._webdriver_flags_manager.browser_exe = browser_exe
+		
+			self.set_start_page_url(start_page_url)
+			self.set_trio_tokens_limit(trio_tokens_limit)
+			self._window_rect = window_rect
+
+			if self.browser_exe is not None and self.debugging_port is not None or self.debugging_ip is not None:
+				self._set_debugging_port(self._find_debugging_port(self.debugging_port), self.debugging_ip)
+		else:
+			warnings.warn("Browser is already running.")
+	
+	def _create_driver(self):
+		"""
+		Abstract method to create a WebDriver instance. Must be implemented in child classes.
+
+		This method is intended to be overridden in subclasses to provide browser-specific
+		WebDriver instantiation logic (e.g., creating ChromeDriver, FirefoxDriver, etc.).
+
+		Raises:
+			NotImplementedError: If the method is not implemented in a subclass.
+		"""
+		
+		raise NotImplementedError("This function must be implemented in child classes.")
+	
+	@property
+	def debugging_port(self) -> Optional[int]:
+		"""
+		Gets the currently set debugging port.
+
+		Retrieves the debugging port number that the browser instance is configured to use.
+
+		Returns:
+			Optional[int]: The debugging port number, or None if not set.
+		"""
+		
+		return self._webdriver_flags_manager._arguments.get("remote_debugging_port", {}).get("value", None)
+	
+	@property
+	def browser_exe(self) -> Optional[Union[str, pathlib.Path]]:
+		"""
+		Gets the path to the browser executable.
+
+		Returns:
+			Optional[Union[str, pathlib.Path]]: The path to the browser executable.
+		"""
+		
+		return self._webdriver_flags_manager.browser_exe
+	
+	def _set_debugging_port(self, debugging_port: Optional[int], debugging_address: Optional[str]):
+		"""
+		Sets the debugging port and address.
+
+		Configures the browser to start with a specific debugging port. This port is used for external tools,
+		like debuggers or browser automation frameworks, to connect to and control the browser instance.
+		Setting a fixed debugging port can be useful for consistent remote debugging or automation setups.
+
+		Args:
+			debugging_port (Optional[int]): Debugging port number. If None or 0, the browser chooses a port automatically.
+			debugging_address (Optional[str]): The IP address for the debugger to listen on. Defaults to '127.0.0.1'.
+		"""
+		
+		if self.browser_exe is not None:
+			_debugging_address = "127.0.0.1" if debugging_address is None else debugging_address
+			_debugging_port = 0 if debugging_port is None else debugging_port
+		
+			self._webdriver_flags_manager.update_flags(
+					BlinkFlags(
+							argument=BlinkArguments(remote_debugging_port=debugging_port, remote_debugging_address=debugging_address),
+							experimental_option=BlinkExperimentalOptions(debugger_address=f"{_debugging_address}:{_debugging_port}"),
+					)
+			)
+	
+	def _check_browser_exe_active(self) -> bool:
+		"""
+		Checks if the WebDriver is active by verifying if the debugging port is in use.
+
+		Determines if a WebDriver instance is currently running and active by checking if the configured
+		debugging port is in use by any process. This is a way to verify if a browser session is active
+		without directly querying the WebDriver itself.
+
+		Returns:
+			bool: True if the WebDriver is active (debugging port is in use), False otherwise.
+		"""
+		
+		for pid, ports in get_localhost_pids_with_addresses(console_encoding=self._console_encoding, ip_pattern=self._ip_pattern).items():
+			if len(ports) == 1 and re.search(rf":{self.debugging_port}\Z", ports[0]) is not None:
+				address = re.search(rf"\A(.+):{self.debugging_port}\Z", ports[0]).group(1)
+
+				if address != self.debugging_ip:
+					self._set_debugging_port(
+							debugging_port=self.debugging_port,
+							debugging_address=re.search(rf"\A(.+):{self.debugging_port}\Z", ports[0]).group(1)
+					)
+		
+				return True
+		
+		return False
+	
+	@property
+	def debugging_ip(self) -> Optional[str]:
+		"""
+		Gets the IP address part of the debugger address.
+
+		Returns:
+			Optional[str]: The IP address of the debugger, or None if not set.
+		"""
+		
+		return self._webdriver_flags_manager._arguments.get("remote_debugging_address", {}).get("value", None)
+	
+	def _find_debugging_port(self, debugging_port: Optional[int]) -> int:
+		"""
+		Finds an appropriate debugging port, either reusing a previous session's port or finding a free port.
+
+		Attempts to locate a suitable debugging port for the browser. It first tries to reuse a debugging port
+		from a previous browser session if a profile directory is specified and a previous session is found.
+		If no previous session is found or if no profile directory is specified, it attempts to use the provided
+		`debugging_port` if available, or finds a minimum free port if no port is provided or the provided port is in use.
+
+		Args:
+			debugging_port (Optional[int]): Requested debugging port number. If provided, the method attempts to use this port. Defaults to None.
+
+		Returns:
+			int: The debugging port number to use. This is either a reused port from a previous session, the provided port if available, or a newly found free port.
+		"""
+		
+		if self.browser_exe is not None:
+			user_data_dir_command = self._webdriver_flags_manager._flags_definitions.get("user_data_dir", None)
+			user_data_dir_value = self._webdriver_flags_manager._arguments.get("user_data_dir", None)
+			user_data_dir = None if user_data_dir_command is None else user_data_dir_value["value"]
+		
+			if user_data_dir_command is not None:
+				previous_session = find_browser_previous_session(self.browser_exe, user_data_dir_command["command"], user_data_dir)
+		
+				if previous_session is not None:
+					return previous_session
+		
+		if debugging_port is not None:
+			return get_localhost_minimum_free_port(
+					console_encoding=self._console_encoding,
+					ip_pattern=self._ip_pattern,
+					ports_to_check=debugging_port
+			)
+		
+		if self.debugging_port is None or self.debugging_port == 0:
+			return get_localhost_minimum_free_port(
+					console_encoding=self._console_encoding,
+					ip_pattern=self._ip_pattern,
+					ports_to_check=self.debugging_port
+			)
+		
+		return self.debugging_port
+	
+	def update_settings(
+			self,
+			flags: Optional[BlinkFlags] = None,
+			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			start_page_url: Optional[str] = None,
+			window_rect: Optional[WindowRect] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
+	):
+		"""
+		Updates various browser settings after initialization or selectively.
+
+		This method allows for dynamic updating of browser settings. Only the settings
+		provided (not None) will be updated.
+
+		Args:
+			flags (Optional[BlinkFlags]): A dictionary of flags to update. Existing flags will be overwritten, others remain.
+			browser_exe (Optional[Union[str, pathlib.Path]]): The path to the browser executable.
+			start_page_url (Optional[str]): Set the start page URL. Defaults to None (no change).
+			window_rect (Optional[WindowRect]): Update the window rectangle settings. Defaults to None (no change).
+			trio_tokens_limit (Optional[Union[int, float]]): Update the Trio token limit. Defaults to None (no change).
+		"""
+		
+		if flags is not None:
+			self._webdriver_flags_manager.update_flags(flags)
+		
+		if browser_exe is not None:
+			self._webdriver_flags_manager.browser_exe = browser_exe
+		
+		if start_page_url is not None:
+			self.set_start_page_url(start_page_url)
+		
+		if window_rect is not None:
+			self._window_rect = window_rect
+		
+		if trio_tokens_limit is not None:
+			self.set_trio_tokens_limit(trio_tokens_limit)
+		
+		self._set_debugging_port(self._find_debugging_port(self.debugging_port), self.debugging_ip)
+	
+	def start_webdriver(
+			self,
+			flags: Optional[BlinkFlags] = None,
+			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			start_page_url: Optional[str] = None,
+			window_rect: Optional[WindowRect] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
+	):
+		"""
+		Starts the WebDriver service and the browser session.
+
+		Initializes and starts the WebDriver instance and the associated browser process.
+		It first updates settings based on provided parameters (if the driver is not already running),
+		checks if a browser process needs to be started, starts it if necessary using Popen,
+		waits for it to become active, and then creates the WebDriver client instance (`self.driver`).
+
+		Args:
+			flags (Optional[BlinkFlags]): Override flags for this start. Defaults to None (use current settings).
+			browser_exe (Optional[Union[str, pathlib.Path]]): Override browser executable path for this start.
+			start_page_url (Optional[str]): Override start page URL for this start. Defaults to None (use current setting).
+			window_rect (Optional[WindowRect]): Override window rectangle for this start. Defaults to None (use current setting).
+			trio_tokens_limit (Optional[Union[int, float]]): Override Trio token limit for this start. Defaults to None (use current setting).
+		"""
+		
+		if self.driver is None:
+			self.update_settings(
+					flags=flags,
+					browser_exe=browser_exe,
+					start_page_url=start_page_url,
+					window_rect=window_rect,
+					trio_tokens_limit=trio_tokens_limit,
+			)
+		
+			if self.browser_exe is not None:
+				self._is_active = self._check_browser_exe_active()
+		
+				if not self._is_active:
+					Popen(self._webdriver_flags_manager.start_command, shell=True)
+		
+					while not self._is_active:
+						self._is_active = self._check_browser_exe_active()
+		
+			self._create_driver()
+	
+	def close_webdriver(self):
+		"""
+		Closes the WebDriver instance and terminates the associated browser subprocess.
+
+		Quits the current WebDriver session, closes all browser windows, and then forcefully terminates
+		the browser process. This ensures a clean shutdown of the browser and WebDriver environment.
+		"""
+		
+		if self.browser_exe is not None:
+			for pid, ports in get_localhost_pids_with_ports(console_encoding=self._console_encoding, ip_pattern=self._ip_pattern).items():
+				if ports == [self.debugging_port]:
+					taskkill_windows(
+							taskkill_type=TaskKillTypes.forcefully_terminate,
+							selectors=ProcessID(pid)
+					)
+		
+					self._is_active = self._check_browser_exe_active()
+		
+					while self._is_active:
+						self._is_active = self._check_browser_exe_active()
+		
+		if self.driver is not None:
+			self.driver.quit()
+			self.driver = None
+	
+	def restart_webdriver(
+			self,
+			flags: Optional[BlinkFlags] = None,
+			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			start_page_url: Optional[str] = None,
+			window_rect: Optional[WindowRect] = None,
+			trio_tokens_limit: Optional[Union[int, float]] = None,
+	):
+		"""
+		Restarts the WebDriver and browser session gracefully.
+
+		Performs a clean restart by first closing the existing WebDriver session and browser
+		(using `close_webdriver`), and then initiating a new session (using `start_webdriver`)
+		with potentially updated settings. If settings arguments are provided, they override
+		the existing settings for the new session; otherwise, the current settings are used.
+
+		Args:
+			flags (Optional[BlinkFlags]): Override flags for the new session. Defaults to None (use current).
+			browser_exe (Optional[Union[str, pathlib.Path]]): Override browser executable for the new session.
+			start_page_url (Optional[str]): Override start page URL for the new session. Defaults to None (use current).
+			window_rect (Optional[WindowRect]): Override window rectangle for the new session. Defaults to None (use current).
+			trio_tokens_limit (Optional[Union[int, float]]): Override Trio token limit for the new session. Defaults to None (use current).
+		"""
+		
+		self.close_webdriver()
+		self.start_webdriver(
+				flags=flags,
+				browser_exe=browser_exe,
+				start_page_url=start_page_url,
+				window_rect=window_rect,
+				trio_tokens_limit=trio_tokens_limit,
+		)

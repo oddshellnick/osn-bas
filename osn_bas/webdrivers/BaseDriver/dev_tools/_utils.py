@@ -6,7 +6,7 @@ import functools
 from typing import (
 	Any,
 	Callable,
-	Literal
+	Literal, TYPE_CHECKING
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	WrongHandlerSettingsError,
@@ -14,12 +14,16 @@ from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 )
 
 
+if TYPE_CHECKING:
+	from osn_bas.webdrivers.BaseDriver.dev_tools.manager import DevTools
+
+
 def warn_if_active(func: Callable) -> Callable:
 	"""
 	Decorator to warn if DevTools operations are attempted while DevTools is active.
 
 	This decorator is used to wrap methods in the DevTools class that should not be called
-	while the DevTools event handler context manager is active. It checks the `_is_active` flag
+	while the DevTools event handler context manager is active. It checks the `is_active` flag
 	of the DevTools instance. If DevTools is active, it issues a warning; otherwise, it proceeds
 	to execute the original method.
 
@@ -32,13 +36,11 @@ def warn_if_active(func: Callable) -> Callable:
 	"""
 	
 	@functools.wraps(func)
-	def wrapper(self, *args, **kwargs):
-		if not self._is_active:
-			return func(self, *args, **kwargs)
-		else:
-			warnings.warn(
-					message="DevTools is active. Exit dev_tools context before changing settings."
-			)
+	def wrapper(self: "DevTools", *args, **kwargs):
+		if self.is_active:
+			warnings.warn("DevTools is active. Exit dev_tools context before changing settings.")
+
+		return func(self, *args, **kwargs)
 	
 	return wrapper
 
@@ -88,6 +90,8 @@ def validate_handler_settings(handler_settings: dict[str, Any]) -> Literal["clas
 	
 	if "function_to_use_path" in handler_settings:
 		return "function"
+
+	raise ValueError("Wrong handler settings.")
 
 
 def log_on_error(func: Callable) -> Callable:

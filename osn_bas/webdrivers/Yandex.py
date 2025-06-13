@@ -1,20 +1,27 @@
 import pathlib
 from selenium import webdriver
-from typing import Optional, Union
 from osn_bas.types import WindowRect
-from osn_bas.webdrivers.types import WebdriverOption
+from typing import (
+	Optional,
+	TypedDict,
+	Union
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from osn_bas.browsers_handler import get_path_to_browser
-from osn_bas.webdrivers.BaseDriver.webdriver import BrowserWebDriver
-from osn_bas.webdrivers.BaseDriver.start_args import BrowserStartArgs
-from selenium.webdriver.remote.remote_connection import RemoteConnection
-from osn_bas.webdrivers.BaseDriver.options import (
-	BrowserOptionsManager
+from osn_bas.webdrivers.BaseDriver.webdriver import BlinkWebDriver, CaptchaWorkerSettings
+from osn_bas.webdrivers.BaseDriver.flags import (
+	BlinkArguments,
+	BlinkAttributes,
+	BlinkExperimentalOptions,
+	BlinkFeatures,
+	BlinkFlagsManager,
+	FlagDefinition,
+	FlagType
 )
 
 
-class YandexOptionsManager(BrowserOptionsManager):
+class YandexFlagsManager(BlinkFlagsManager):
 	"""
 	Manages Yandex Browser-specific options for Selenium WebDriver.
 
@@ -22,14 +29,15 @@ class YandexOptionsManager(BrowserOptionsManager):
 	for Yandex Browser options, such as experimental options and arguments.
 
 	Attributes:
-		_options (webdriver.ChromeOptions): Yandex Browser options object, which is based on ChromeOptions.
-		_debugging_port_command (WebdriverOption): Configuration for debugging port option.
-		_user_agent_command (WebdriverOption): Configuration for user agent option.
-		_proxy_command (WebdriverOption): Configuration for proxy option.
-		_enable_bidi_command (WebdriverOption): Configuration for enable BiDi option.
 	"""
 	
-	def __init__(self):
+	def __init__(
+			self,
+			browser_exe: Optional[Union[str, pathlib.Path]] = None,
+			start_page_url: Optional[str] = None,
+			flags_types: Optional[dict[str, FlagType]] = None,
+			flags_definitions: Optional[dict[str, FlagDefinition]] = None
+	):
 		"""
 		Initializes YandexOptionsManager.
 
@@ -37,42 +45,24 @@ class YandexOptionsManager(BrowserOptionsManager):
 		debugging port, user agent, proxy, and BiDi protocol.
 		"""
 		
+		yandex_flags_types = {}
+		
+		if flags_types is not None:
+			yandex_flags_types.update(flags_types)
+		
+		yandex_flags_definitions = {}
+		
+		if flags_definitions is not None:
+			yandex_flags_definitions.update(flags_definitions)
+		
 		super().__init__(
-				WebdriverOption(
-						name="debugger_address_",
-						command="debuggerAddress",
-						type="experimental"
-				),
-				WebdriverOption(name="user_agent_", command="--user-agent=\"{value}\"", type="normal"),
-				WebdriverOption(name="proxy_", command="--proxy-server=\"{value}\"", type="normal"),
-				WebdriverOption(name="enable_bidi_", command="enable_bidi", type="attribute"),
+				browser_exe=browser_exe,
+				start_page_url=start_page_url,
+				flags_types=yandex_flags_types,
+				flags_definitions=yandex_flags_definitions,
 		)
 	
-	def hide_automation(self, hide: bool):
-		"""
-		Adds arguments to hide automation features in Yandex Browser.
-
-		This method adds Yandex Browser-specific arguments to disable automation detection, making the browser appear more like a regular user.
-
-		Args:
-			hide (bool): If True, adds arguments to hide automation; otherwise, removes them.
-		"""
-		
-		if hide:
-			self.set_argument(
-					"disable_blink_features_",
-					"--disable-blink-features=AutomationControlled"
-			)
-			self.set_argument("no_first_run_", "--no-first-run")
-			self.set_argument("no_service_autorun_", "--no-service-autorun")
-			self.set_argument("password_store_", "--password-store=basic")
-		else:
-			self.remove_argument("disable_blink_features_")
-			self.remove_argument("no_first_run_")
-			self.remove_argument("no_service_autorun_")
-			self.remove_argument("password_store_")
-	
-	def renew_webdriver_options(self) -> Options:
+	def _renew_webdriver_options(self) -> Options:
 		"""
 		Creates and returns a new Options object.
 
@@ -86,93 +76,66 @@ class YandexOptionsManager(BrowserOptionsManager):
 		return Options()
 
 
-class YandexStartArgs(BrowserStartArgs):
-	"""
-	Manages Yandex Browser-specific browser start arguments for Selenium WebDriver.
-
-	This class extends BrowserStartArgs and is tailored for Yandex Browser. It defines
-	command-line arguments specific to starting the Yandex Browser with configurations
-	suitable for WebDriver control, such as remote debugging port, user profile directory,
-	headless mode, and proxy settings.
-
-	Attributes:
-		_browser_exe (Union[str, pathlib.Path]): Path to the Yandex Browser executable.
-		_debugging_port_command_line (str): Command line argument for debugging port.
-		_profile_dir_command_line (str): Command line argument for profile directory.
-		_headless_mode_command_line (str): Command line argument for headless mode.
-		_mute_audio_command_line (str): Command line argument for mute audio.
-		_user_agent_command_line (str): Command line argument for user agent.
-		_proxy_server_command_line (str): Command line argument for proxy server.
-		start_page_url (str): Default start page URL, set to Yandex homepage.
-		debugging_port (Optional[int]): Current debugging port number.
-		profile_dir (Optional[str]): Current profile directory path.
-		headless_mode (Optional[bool]): Current headless mode status.
-		mute_audio (Optional[bool]): Current mute audio status.
-		user_agent (Optional[str]): Current user agent string.
-		proxy_server (Optional[str]): Current proxy server address.
-	"""
-	
-	def __init__(self, browser_exe: Union[str, pathlib.Path]):
-		"""
-		 Initializes YandexStartArgs.
-
-		Configures command-line arguments for starting the Yandex Browser, including
-		settings for remote debugging, user data directory, headless mode, and more.
-
-		 Args:
-		 	browser_exe (Union[str, pathlib.Path]): The path to the Yandex executable.
-		"""
-		
-		super().__init__(
-				browser_exe,
-				"--remote-debugging-port={value}",
-				"--user-data-dir=\"{value}\"",
-				"--headless",
-				"--mute-audio",
-				"--user-agent=\"{value}\"",
-				"--proxy-server=\"{value}\"",
-		)
+class YandexFeatures(BlinkFeatures, total=False):
+	pass
 
 
-class YandexWebDriver(BrowserWebDriver):
+class YandexAttributes(BlinkAttributes, total=False):
+	pass
+
+
+class YandexExperimentalOptions(BlinkExperimentalOptions, total=False):
+	pass
+
+
+class YandexArguments(BlinkArguments, total=False):
+	pass
+
+
+class YandexFlags(TypedDict, total=False):
+	argument: YandexArguments
+	experimental_option: YandexExperimentalOptions
+	attribute: YandexAttributes
+	blink_feature: YandexFeatures
+
+
+class YandexWebDriver(BlinkWebDriver):
 	"""
 	Manages a Yandex Browser session using Selenium WebDriver.
 
-	This class specializes BrowserWebDriver for Yandex Browser. It sets up and manages
+	This class specializes BlinkWebDriver for Yandex Browser. It sets up and manages
 	the lifecycle of a Yandex Browser instance controlled by Selenium WebDriver,
 	including starting the browser with specific options, handling sessions, and managing browser processes.
 	Yandex Browser is based on Chromium, so it uses ChromeOptions and ChromeDriver.
 
 	Attributes:
-		_window_rect (WindowRect): Initial window rectangle settings.
-		_js_scripts (dict[str, str]): Collection of JavaScript scripts for browser interaction.
-		_browser_exe (Union[str, pathlib.Path]): Path to the Yandex Browser executable.
-		_webdriver_path (str): Path to the ChromeDriver executable (Yandex Browser compatible).
-		_webdriver_start_args (YandexStartArgs): Manages Yandex Browser startup arguments.
-		_webdriver_options_manager (YandexOptionsManager): Manages Yandex Browser options.
-		driver (Optional[webdriver.Chrome]): Selenium Chrome WebDriver instance, used for Yandex Browser.
-		_base_implicitly_wait (int): Base implicit wait timeout for element searching.
-		_base_page_load_timeout (int): Base page load timeout for page loading operations.
-		_is_active (bool): Indicates if the WebDriver instance is currently active.
-		dev_tools (DevTools): Instance of DevTools for interacting with browser developer tools.
+		_window_rect (Optional[WindowRect]): The window size and position settings.
+		_js_scripts (dict[str, str]): A dictionary of pre-loaded JavaScript scripts.
+		_webdriver_path (str): The file path to the WebDriver executable.
+		_webdriver_flags_manager (YandexFlagsManager): The manager for browser flags and options.
+		driver (Optional[Union[webdriver.Chrome, webdriver.Edge, webdriver.Firefox]]): The active Selenium WebDriver instance.
+		_base_implicitly_wait (int): The default implicit wait time in seconds.
+		_base_page_load_timeout (int): The default page load timeout in seconds.
+		_captcha_workers (list[CaptchaWorkerSettings]): A list of configured captcha worker settings.
+		_is_active (bool): A flag indicating if the browser process is active.
+		trio_capacity_limiter (trio.CapacityLimiter): A capacity limiter for controlling concurrent async operations.
+		dev_tools (DevTools): An interface for interacting with the browser's DevTools protocol.
+		_console_encoding (str): The encoding of the system console.
+		_ip_pattern (re.Pattern): A compiled regex pattern to match IP addresses and ports.
 	"""
 	
 	def __init__(
 			self,
 			webdriver_path: str,
-			enable_devtools: bool,
+			use_browser_exe: bool = True,
 			browser_exe: Optional[Union[str, pathlib.Path]] = None,
-			hide_automation: bool = True,
-			debugging_port: Optional[int] = None,
-			profile_dir: Optional[str] = None,
-			headless_mode: bool = False,
-			mute_audio: bool = False,
-			proxy: Optional[Union[str, list[str]]] = None,
-			user_agent: Optional[str] = None,
+			flags: Optional[YandexFlags] = None,
+			start_page_url: str = "https://www.yandex.com",
 			implicitly_wait: int = 5,
 			page_load_timeout: int = 5,
 			window_rect: Optional[WindowRect] = None,
-			start_page_url: str = "https://www.yandex.com",
+			trio_tokens_limit: Union[int, float] = 40,
+			captcha_workers: Optional[list[CaptchaWorkerSettings]] = None,
 	):
 		"""
 		Initializes the YandexWebDriver instance for managing Yandex Browser.
@@ -183,46 +146,36 @@ class YandexWebDriver(BrowserWebDriver):
 
 		Args:
 			webdriver_path (str): Path to the ChromeDriver executable compatible with Yandex Browser.
-			enable_devtools (bool): Enables or disables the use of DevTools for this browser instance.
-			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Yandex Browser executable.
-				If None, the path is automatically detected. Defaults to None.
-			hide_automation (bool): Hides automation indicators in the browser if True. Defaults to True.
-			debugging_port (Optional[int]): Specifies a debugging port for the browser. Defaults to None.
-			profile_dir (Optional[str]): Path to the browser profile directory to be used. Defaults to None.
-			headless_mode (bool): Runs Yandex Browser in headless mode if True. Defaults to False.
-			mute_audio (bool): Mutes audio output in Yandex Browser if True. Defaults to False.
-			proxy (Optional[Union[str, list[str]]]): Proxy settings for Yandex Browser.
-				Can be a single proxy string or a list of proxy strings. Defaults to None.
-			user_agent (Optional[str]): Custom user agent string for Yandex Browser. Defaults to None.
+			use_browser_exe (bool): If True, attempts to automatically detect or uses the provided `browser_exe` path. If False, does not configure the browser executable path. Defaults to True.
+			browser_exe (Optional[Union[str, pathlib.Path]]): Path to the Yandex Browser executable. If `use_browser_exe` is True and `browser_exe` is None, the path is automatically detected. If `use_browser_exe` is False, this parameter is ignored. Defaults to None.
+			flags (Optional[YandexFlags]): Specific Yandex Browser flags and options to apply. Defaults to None.
+			start_page_url (str): URL to open when the browser starts. Defaults to "https://www.yandex.com".
 			implicitly_wait (int): Base implicit wait time for WebDriver element searches in seconds. Defaults to 5.
 			page_load_timeout (int): Base page load timeout for WebDriver operations in seconds. Defaults to 5.
 			window_rect (Optional[WindowRect]): Initial window rectangle settings for the browser window. Defaults to None.
-			start_page_url (str): URL to open when the browser starts. Defaults to "https://www.yandex.com".
+			trio_tokens_limit (Union[int, float]): The total number of tokens for the Trio capacity limiter used for concurrent operations. Use `float('inf')` for unlimited. Defaults to 40.
+			captcha_workers (Optional[list[CaptchaWorkerSettings]]): A list of configured captcha worker settings. Defaults to None.
 		"""
 		
-		if browser_exe is None:
+		if browser_exe is None and use_browser_exe:
 			browser_exe = get_path_to_browser("Yandex")
+		elif browser_exe is not None and not use_browser_exe:
+			browser_exe = None
 		
 		super().__init__(
 				browser_exe=browser_exe,
 				webdriver_path=webdriver_path,
-				enable_devtools=enable_devtools,
-				webdriver_start_args=YandexStartArgs,
-				webdriver_options_manager=YandexOptionsManager,
-				hide_automation=hide_automation,
-				debugging_port=debugging_port,
-				profile_dir=profile_dir,
-				headless_mode=headless_mode,
-				mute_audio=mute_audio,
-				proxy=proxy,
-				user_agent=user_agent,
+				flags_manager_type=YandexFlagsManager,
+				flags=flags,
+				start_page_url=start_page_url,
 				implicitly_wait=implicitly_wait,
 				page_load_timeout=page_load_timeout,
 				window_rect=window_rect,
-				start_page_url=start_page_url,
+				trio_tokens_limit=trio_tokens_limit,
+				captcha_workers=captcha_workers,
 		)
 	
-	def create_driver(self):
+	def _create_driver(self):
 		"""
 		Creates the Yandex webdriver instance.
 
@@ -230,40 +183,19 @@ class YandexWebDriver(BrowserWebDriver):
 		It also sets the window position, size, implicit wait time, and page load timeout.
 		"""
 		
-		webdriver_options = self._webdriver_options_manager._options
-		webdriver_service = Service(executable_path=self._webdriver_path)
+		webdriver_options = self._webdriver_flags_manager.options
+		webdriver_service = Service(
+				executable_path=self._webdriver_path,
+				port=self.debugging_port if self.browser_exe is None else 0,
+				service_args=self._webdriver_flags_manager.start_args
+				if self.browser_exe is None
+				else None
+		)
 		
 		self.driver = webdriver.Chrome(options=webdriver_options, service=webdriver_service)
 		
-		self.set_window_rect(self._window_rect)
-		self.set_driver_timeouts(
-				page_load_timeout=self._base_page_load_timeout,
-				implicit_wait_timeout=self._base_implicitly_wait
-		)
-	
-	def remote_connect_driver(self, command_executor: Union[str, RemoteConnection], session_id: str):
-		"""
-		Connects to an existing remote Yandex WebDriver session.
-
-		This method establishes a connection to a remote Selenium WebDriver server and reuses an existing browser session of Yandex Browser.
-		It allows you to control a browser instance that is already running remotely, given the command executor URL and session ID of that session.
-
-		Args:
-			command_executor (Union[str, RemoteConnection]): The URL of the remote WebDriver server or a `RemoteConnection` object.
-			session_id (str): The ID of the existing WebDriver session to connect to.
-
-		:Usage:
-		  command_executor, session_id = driver.get_vars_for_remote()
-		  new_driver = YandexWebDriver(webdriver_path="path/to/chromedriver")
-		  new_driver.remote_connect_driver(command_executor, session_id)
-		  # Now new_driver controls the same browser session as driver
-		"""
-		
-		self.driver = webdriver.Remote(
-				command_executor=command_executor,
-				options=self._webdriver_options_manager._options
-		)
-		self.driver.session_id = session_id
+		if self._window_rect is not None:
+			self.set_window_rect(self._window_rect)
 		
 		self.set_driver_timeouts(
 				page_load_timeout=self._base_page_load_timeout,
