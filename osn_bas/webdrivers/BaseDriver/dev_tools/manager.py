@@ -3,38 +3,38 @@ import trio
 import logging
 import traceback
 from types import TracebackType
-from collections.abc import Awaitable
+from collections.abc import Sequence
 from selenium.webdriver.common.bidi.cdp import CdpSession, open_cdp
 from selenium.webdriver.remote.bidi_connection import BidiConnection
-import osn_bas.webdrivers.BaseDriver.dev_tools.domains.fetch as fetch
 from contextlib import (
 	AbstractAsyncContextManager,
 	asynccontextmanager
 )
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains.abstract import AbstractEvent
 from osn_bas.webdrivers.BaseDriver.protocols import (
 	TrioWebDriverWrapperProtocol
-)
-from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
-	CantEnterDevToolsContextError
 )
 from typing import (
 	Any,
 	AsyncGenerator,
-	Callable,
-	Coroutine,
 	Optional,
 	TYPE_CHECKING,
+	Union,
 	cast
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
-	CallbacksSettings,
-	Fetch,
-	_special_keys
+from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
+	CantEnterDevToolsContextError
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools._utils import (
 	log_on_error,
 	validate_handler_settings,
 	warn_if_active
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
+	Domains,
+	DomainsSettings,
+	domains_classes_type,
+	domains_type
 )
 
 
@@ -48,7 +48,8 @@ class DevTools:
 
 	Provides an interface to interact with Chrome DevTools Protocol (CDP)
 	for advanced browser control and monitoring. This class supports event handling
-	and allows for dynamic modifications of browser behavior, such as network request interception.
+	and allows for dynamic modifications of browser behavior, such as network request interception,
+	by using an asynchronous context manager.
 
 	Attributes:
 		_webdriver (BrowserWebDriver): The parent WebDriver instance associated with this DevTools instance.
@@ -59,7 +60,16 @@ class DevTools:
 		_nursery (Optional[AbstractAsyncContextManager[trio.Nursery, Optional[bool]]]): Asynchronous context manager for the Trio nursery.
 		_nursery_object (Optional[trio.Nursery]): The Trio nursery object when active, managing concurrent tasks.
 		_exit_event (Optional[trio.Event]): Trio Event to signal exiting of DevTools event handling.
-		_callbacks_settings (CallbacksSettings): Settings for configuring DevTools event callbacks.
+		_domains_settings (Domains): Settings for configuring DevTools domain handlers.
+		cache (dict[Any, Any]): A dictionary for caching data across DevTools event handlers.
+
+	EXAMPLES
+	________
+	async with driver.dev_tools as driver_wrapper:
+		# DevTools event handling is active within this block.
+		# Configure domain handlers here.
+		await driver_wrapper.get("https://example.com")
+	# DevTools event handling is deactivated after exiting the block.
 	"""
 	
 	def __init__(self, parent_webdriver: "BrowserWebDriver"):
@@ -67,7 +77,7 @@ class DevTools:
 		Initializes the DevTools instance.
 
 		Args:
-			parent_webdriver (Any): The parent WebDriver instance that this DevTools instance will be associated with.
+			parent_webdriver ("BrowserWebDriver"): The parent WebDriver instance that this DevTools instance will be associated with.
 		"""
 		
 		self._webdriver = parent_webdriver
@@ -78,46 +88,38 @@ class DevTools:
 		self._nursery: Optional[AbstractAsyncContextManager[trio.Nursery, Optional[bool]]] = None
 		self._nursery_object: Optional[trio.Nursery] = None
 		self._exit_event: Optional[trio.Event] = None
-		
-		self._callbacks_settings = CallbacksSettings(
-				fetch=Fetch(
-						use=False,
-						enable_func_path="fetch.enable",
-						disable_func_path="fetch.disable",
-						request_paused=None
-				)
-		)
+		self._domains_settings: Domains = {}
+		self.cache = {}
 	
 	async def _start_listeners(self, cdp_session: CdpSession):
 		"""
 		Starts all configured DevTools event listeners.
 
-		This method initiates listeners for all event types configured in `_callbacks_settings` that are set to 'use'.
-		It enables target discovery and starts a nursery task to process new targets, then iterates through each event type and name to start individual listeners.
+		This method initiates listeners for all domains configured in `_domains_settings`.
+		It enables target discovery, starts a nursery task to process new targets, enables
+		each configured domain, and starts the individual event listeners.
 
 		Args:
 			cdp_session (CdpSession): The CDP session object to use for starting listeners.
-
-		Raises:
-			WrongHandlerSettingsTypeError: If the handler_settings is not a dictionary.
-			WrongHandlerSettingsError: If the handler_settings does not contain exactly one of the required keys.
 		"""
 		
 		try:
 			await cdp_session.execute(self._get_devtools_object("target.set_discover_targets")(True))
 			self._nursery_object.start_soon(self._process_new_targets, cdp_session)
 		
-			for domain_name, domain_config in self._callbacks_settings.items():
-				if domain_config["use"]:
-					if domain_config.get("enable_func_path", None) is not None:
-						await cdp_session.execute(self._get_devtools_object(domain_config["enable_func_path"])())
+			for domain_name, domain_config in self._domains_settings.items():
+				if domain_config.get("enable_func_path", None) is not None:
+					enable_func_kwargs = domain_config.get("enable_func_kwargs", {})
+					await cdp_session.execute(
+							self._get_devtools_object(domain_config["enable_func_path"])(**enable_func_kwargs)
+					)
 		
-					for event_name, event_config in domain_config.items():
-						if event_name not in _special_keys and event_config is not None:
-							handler_type = validate_handler_settings(event_config)
+				for event_name, event_config in domain_config["handlers"].items():
+					if event_config is not None:
+						handler_type = validate_handler_settings(event_config)
 		
-							if handler_type == "class":
-								self._nursery_object.start_soon(self._run_event_listener, cdp_session, domain_name, event_name)
+						if handler_type == "class":
+							self._nursery_object.start_soon(self._run_event_listener, cdp_session, event_config)
 		
 			await trio.sleep(0.0)
 		except (trio.Cancelled, trio.EndOfChannel):
@@ -128,7 +130,7 @@ class DevTools:
 		Processes new browser targets as they are created.
 
 		Listens for 'target.TargetCreated' events, which are emitted when new targets (like tabs or windows) are created in the browser.
-		For each new target, it starts a new nursery task to handle events for that target.
+		For each new target of type 'page', it starts a new nursery task to handle events for that target.
 
 		Args:
 			cdp_session (CdpSession): The CDP session object to listen for target creation events.
@@ -191,56 +193,30 @@ class DevTools:
 		
 		return object_
 	
-	def _get_handler_to_use(self, event_type: str, event_name: str) -> Optional[
-		Callable[
-			[CdpSession, fetch.RequestPausedHandlerSettings, Any],
-			Coroutine[None, None, Any]
-		]
-	]:
+	async def _run_event_listener(self, cdp_session: CdpSession, event_config: AbstractEvent):
 		"""
-		Retrieves the appropriate handler function for a given DevTools event.
+		Runs a specific event listener, processing events from a CDP channel.
 
-		Based on the event type and name, this method returns the corresponding handler function
-		defined within the DevTools class. It's used to dynamically dispatch events to their respective handlers.
+		This method sets up a listener for a specific CDP event using the provided configuration.
+		It continuously receives events from the channel and starts a new task in the nursery
+		to execute the handler function for each event.
 
 		Args:
-			event_type (str): The type of DevTools event (e.g., "fetch").
-			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
-
-		Returns:
-			Optional[Callable[[CdpSession, fetch.RequestPausedHandlerSettings, Any], Coroutine[None, None, Any]]]: The handler function if found, otherwise None.
+			cdp_session (CdpSession): The CDP session to listen on.
+			event_config (AbstractEvent): The configuration for the event listener.
 		"""
 		
-		return getattr(self, f"_handle_{event_type}_{event_name}", None)
-	
-	async def _run_event_listener(self, cdp_session: CdpSession, event_type: str, event_name: str):
-		"""
-		Runs an asynchronous event listener loop for a specific DevTools event.
-
-		Sets up a listener on the provided CDP session for the specified event type and name.
-		It retrieves the associated handler settings and the handler function from internal state.
-		It then continuously receives events from the CDP session's channel and passes them
-		to the handler function for processing. The loop continues until cancelled or
-		the channel is closed. Exceptions during event processing are caught and logged.
-
-		Args:
-			cdp_session (CdpSession): The Chrome DevTools Protocol session object to listen to events from.
-			event_type (str): The domain of the DevTools event (e.g., "fetch", "log", "network").
-			event_name (str): The specific name of the event within the domain (e.g., "requestPaused", "entryAdded").
-		"""
+		handler = event_config["handle_function"]
 		
-		handler_settings = self._callbacks_settings[event_type][event_name]
-		handler = self._get_handler_to_use(event_type, event_name)
-		
-		class_to_use = self._get_devtools_object(handler_settings["class_to_use_path"])
-		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(class_to_use, buffer_size=handler_settings["listen_buffer_size"])
+		class_to_use = self._get_devtools_object(event_config["class_to_use_path"])
+		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(class_to_use, buffer_size=event_config["listen_buffer_size"])
 		
 		while True:
 			try:
 				event = await receiver_channel.receive()
 		
 				if handler:
-					self._nursery_object.start_soon(handler, cdp_session, handler_settings, event)
+					self._nursery_object.start_soon(handler, self, cdp_session, event_config, event)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):
@@ -302,17 +278,17 @@ class DevTools:
 
 		Returns:
 			TrioWebDriverWrapperProtocol: Returns a wrapped WebDriver object that can be used to interact with the browser
-				 while DevTools event handling is active.
+				while DevTools event handling is active.
 
 		Raises:
 			CantEnterDevToolsContextError: If the WebDriver driver is not initialized, indicating that a browser session has not been started yet.
 
-		Usage
-		______
+		EXAMPLES
+		________
 		async with driver.dev_tools as driver_wrapper:
 			# DevTools event handling is active within this block
-			await driver_wrapper.set_request_paused_handler(...)
-			await driver.search_url("example.com")
+			await driver.dev_tools.set_domains_handlers(...)
+			await driver_wrapper.get("https://example.com")
 		# DevTools event handling is deactivated after exiting the block
 		"""
 		
@@ -347,9 +323,9 @@ class DevTools:
 		and the BiDi connection is properly shut down.
 
 		Args:
-			exc_type (Optional[type]): The exception type, if any, that caused the context to be exited.
+			exc_type (Optional[type[BaseException]]): The exception type, if any, that caused the context to be exited.
 			exc_val (Optional[BaseException]): The exception value, if any.
-			exc_tb (Optional[traceback.TracebackType]): The exception traceback, if any.
+			exc_tb (Optional[TracebackType]): The exception traceback, if any.
 		"""
 		
 		@log_on_error
@@ -358,6 +334,7 @@ class DevTools:
 			
 			if self._nursery_object is not None:
 				self._nursery_object.cancel_scope.cancel()
+				self._nursery_object = None
 		
 		@log_on_error
 		async def _close_nursery():
@@ -365,6 +342,7 @@ class DevTools:
 			
 			if self._nursery is not None:
 				await self._nursery.__aexit__(exc_type, exc_val, exc_tb)
+				self._nursery = None
 		
 		@log_on_error
 		async def _close_bidi_connection():
@@ -372,6 +350,9 @@ class DevTools:
 			
 			if self._bidi_connection is not None:
 				await self._bidi_connection.__aexit__(exc_type, exc_val, exc_tb)
+				self._bidi_connection = None
+				self._bidi_connection_object = None
+				self._bidi_devtools = None
 		
 		@log_on_error
 		def _activate_exit_event():
@@ -379,68 +360,15 @@ class DevTools:
 			
 			if self._exit_event is not None:
 				self._exit_event.set()
+				self._exit_event = None
 		
 		if self._is_active:
 			_activate_exit_event()
-			self._exit_event = None
-		
 			_close_nursery_object()
-			self._nursery_object = None
-		
 			await _close_nursery()
-			self._nursery = None
-		
 			await _close_bidi_connection()
-			self._bidi_connection = None
-			self._bidi_connection_object = None
-			self._bidi_devtools = None
 		
 			self._is_active = False
-	
-	async def _handle_fetch_request_paused(
-			self,
-			cdp_session: CdpSession,
-			handler_settings: fetch.RequestPausedHandlerSettings,
-			event: Any
-	):
-		"""
-		Processes a 'fetch.requestPaused' event received from the DevTools Protocol.
-
-		This internal method is executed by the event listener loop whenever a 'fetch.requestPaused'
-		event occurs and is routed to this handler. It applies the configured `post_data_handler`
-		and `headers_handler` from the `handler_settings` to modify the request, handling cases
-		where the handlers might return awaitable results. Finally, it instructs the browser
-		to continue the request with the (potentially) modified parameters using `fetch.continue_request`.
-		Errors occurring during the handler execution or the continue request are caught
-		and passed to the `on_error` callable defined in the handler settings.
-
-		Args:
-			cdp_session (CdpSession): The CDP session object used to communicate with the browser's DevTools.
-			handler_settings (fetch.RequestPausedHandlerSettings): Configuration settings for this specific
-				'requestPaused' handler, including the callable handlers and the error handler.
-			event (Any): The 'fetch.requestPaused' event object containing details about the paused request.
-						 Expected to be an instance of the class specified by `handler_settings["class_to_use_path"]`.
-		"""
-		
-		post_data_result = handler_settings["post_data_handler"](handler_settings, event)
-		headers_result = handler_settings["headers_handler"](handler_settings, self._get_devtools_object("fetch.HeaderEntry"), event)
-		
-		try:
-			await cdp_session.execute(
-					self._get_devtools_object("fetch.continue_request")(
-							request_id=event.request_id,
-							url=event.request.url,
-							method=event.request.method,
-							post_data=post_data_result
-							if not isinstance(post_data_result, Awaitable)
-							else await post_data_result,
-							headers=headers_result
-							if not isinstance(headers_result, Awaitable)
-							else await headers_result,
-					)
-			)
-		except (Exception,) as error:
-			handler_settings["on_error"](self, event, error)
 	
 	@property
 	def is_active(self) -> bool:
@@ -454,111 +382,59 @@ class DevTools:
 		return self._is_active
 	
 	@warn_if_active
-	def _remove_handler_settings(self, event_type: str, event_name: str):
+	def _remove_handler_settings(self, domain: domains_type):
 		"""
-		Removes specific handler settings for a given DevTools event.
-
-		This method is used internally to clean up configurations when a handler is no longer needed.
-		It sets the handler settings for a specific event name under an event type to None and updates the 'use' flag for that event type.
+		Removes the settings for a specific domain.
 
 		Args:
-			event_type (str): The type of DevTools event domain (e.g., "fetch").
-			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
+			domain (domains_type): The name of the domain to remove settings for.
 		"""
 		
-		self._callbacks_settings[event_type][event_name] = None
-		self._callbacks_settings[event_type]["use"] = len(
-				[
-					key
-					for key, value in self._callbacks_settings[event_type].items()
-					if key not in ["use", "enable_func_path", "disable_func_path"]
-					and value is not None
-				]
-		) != 0
+		self._domains_settings.pop(domain, None)
 	
-	def remove_request_paused_handler_settings(self):
+	def remove_domains_handlers(self, domains: Union[domains_type, Sequence[domains_type]]):
 		"""
-		Removes the settings for the request paused handler specifically for fetch events.
+		Removes handler settings for one or more DevTools domains.
 
-		This method disables the interception and modification of network requests that were set up using `set_request_paused_handler`.
-		It calls `_remove_handler_settings` specifically for the 'fetch' event type and 'request_paused' event name.
+		This method can be called with a single domain name or a sequence of domain names.
+
+		Args:
+			domains (Union[domains_type, Sequence[domains_type]]): A single domain name as a string,
+				or a sequence of domain names to be removed.
+
+		Raises:
+			TypeError: If the `domains` argument is not a string or a sequence of strings.
 		"""
 		
-		self._remove_handler_settings(event_type="fetch", event_name="request_paused")
+		if isinstance(domains, Sequence) and all(isinstance(domain, str) for domain in domains):
+			for domain in domains:
+				self._remove_handler_settings(domain)
+		elif isinstance(domains, str):
+			self._remove_handler_settings(domains)
+		else:
+			raise TypeError(f"domains must be a str or a sequence of str, got {type(domains)}.")
 	
 	@warn_if_active
-	def _set_handler_settings(
-			self,
-			event_type: str,
-			event_name: str,
-			settings_type: type,
-			**kwargs: Any
-	):
+	def _set_handler_settings(self, domain: domains_type, settings: domains_classes_type,):
 		"""
-		Sets handler settings for a specific DevTools event.
-
-		This internal method configures the settings for handling a specific DevTools event. It updates the `_callbacks_settings`
-		with the provided settings, including the settings type and any keyword arguments, and marks the event type as 'in use'.
+		Sets the handler settings for a specific domain.
 
 		Args:
-			event_type (str): The type of DevTools event domain (e.g., "fetch").
-			event_name (str): The name of the specific event handler within the event type (e.g., "request_paused").
-			settings_type (type): The class type for the settings object, used for instantiation.
-			**kwargs (Any): Keyword arguments to be passed to the settings_type constructor.
+			domain (domains_type): The name of the domain to configure.
+			settings (domains_classes_type): The configuration settings for the domain.
 		"""
 		
-		self._callbacks_settings[event_type]["use"] = True
-		self._callbacks_settings[event_type][event_name] = settings_type(**kwargs)
+		self._domains_settings[domain] = settings
 	
-	def set_request_paused_handler(
-			self,
-			listen_buffer_size: int = 50,
-			post_data_instances: Optional[Any] = None,
-			headers_instances: Optional[dict[str, fetch.HeaderInstance]] = None,
-			post_data_handler: Optional[fetch.post_data_handler_type] = None,
-			headers_handler: Optional[fetch.headers_handler_type] = None
-	):
+	def set_domains_handlers(self, settings: DomainsSettings):
 		"""
-		Sets up a handler for 'fetch.requestPaused' DevTools events to intercept and modify network requests.
+		Sets handler settings for multiple domains from a DomainsSettings object.
 
-		Configures the Chrome DevTools Protocol's Fetch domain to intercept network requests
-		that the browser is about to send. When a request is paused, the configured handler
-		settings and custom handler functions are used to potentially inspect or modify
-		the request's post data and headers before allowing the request to continue.
+		This method iterates through the provided settings and applies them to the corresponding domains.
 
 		Args:
-			listen_buffer_size (int): The size of the buffer for the Trio channel that will
-				listen for incoming 'fetch.requestPaused' events. Defaults to 50.
-			post_data_instances (Optional[Any]): Optional data structure(s) used to match against
-				the request's post data. If provided, the handler might only process requests
-				whose post data matches one of these instances, depending on the custom handler logic.
-				Defaults to None (no post data matching required by settings).
-			headers_instances (Optional[Dict[str, fetch.HeaderInstance]]): Optional dictionary defining
-				header modifications based on predefined instructions. Keys are header names, and
-				values are `HeaderInstance` objects specifying how to modify the header (e.g., set, remove).
-				These instances are passed to the `headers_handler`. Defaults to None (no instance-based header modifications).
-			post_data_handler (Optional[fetch.post_data_handler_type]): A custom callable (function or method)
-				to process and modify the request's post data. This function receives the handler settings
-				and the event object. If None, `fetch.default_post_data_handler` is used. Defaults to None.
-			headers_handler (Optional[fetch.headers_handler_type]): A custom callable (function or method)
-				to process and modify the request's headers. This function receives the handler settings,
-				the DevTools header entry class, and the event object. If None, `fetch.default_headers_handler`
-				is used. Defaults to None.
+			settings (DomainsSettings): An object containing the configuration for one or more domains.
 		"""
 		
-		self._set_handler_settings(
-				event_type="fetch",
-				event_name="request_paused",
-				settings_type=fetch.RequestPausedHandlerSettings,
-				class_to_use_path="fetch.RequestPaused",
-				listen_buffer_size=listen_buffer_size,
-				post_data_instances=post_data_instances,
-				headers_instances=headers_instances,
-				post_data_handler=fetch.default_post_data_handler
-				if post_data_handler is None
-				else post_data_handler,
-				headers_handler=fetch.default_headers_handler
-				if headers_handler is None
-				else headers_handler,
-				on_error=fetch.default_on_error
-		)
+		for domain_name, domain_settings in settings.to_dict().items():
+			self._set_handler_settings(domain_name, domain_settings)

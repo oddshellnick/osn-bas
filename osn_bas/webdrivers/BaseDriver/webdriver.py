@@ -1985,7 +1985,7 @@ class BlinkWebDriver(BrowserWebDriver):
 		
 		self._console_encoding = sys.stdout.encoding
 		self._ip_pattern = re.compile(r"\A(\d+\.\d+\.\d+\.\d+|\[::]):\d+\Z")
-
+		
 		super().__init__(
 				webdriver_path=webdriver_path,
 				flags_manager_type=flags_manager_type,
@@ -1998,6 +1998,111 @@ class BlinkWebDriver(BrowserWebDriver):
 		)
 		
 		self.update_settings(flags=flags, browser_exe=browser_exe, start_page_url=start_page_url,)
+	
+	@property
+	def debugging_port(self) -> Optional[int]:
+		"""
+		Gets the currently set debugging port.
+
+		Retrieves the debugging port number that the browser instance is configured to use.
+
+		Returns:
+			Optional[int]: The debugging port number, or None if not set.
+		"""
+		
+		return self._webdriver_flags_manager._arguments.get("remote_debugging_port", {}).get("value", None)
+	
+	@property
+	def browser_exe(self) -> Optional[Union[str, pathlib.Path]]:
+		"""
+		Gets the path to the browser executable.
+
+		Returns:
+			Optional[Union[str, pathlib.Path]]: The path to the browser executable.
+		"""
+		
+		return self._webdriver_flags_manager.browser_exe
+	
+	def _find_debugging_port(self, debugging_port: Optional[int]) -> int:
+		"""
+		Finds an appropriate debugging port, either reusing a previous session's port or finding a free port.
+
+		Attempts to locate a suitable debugging port for the browser. It first tries to reuse a debugging port
+		from a previous browser session if a profile directory is specified and a previous session is found.
+		If no previous session is found or if no profile directory is specified, it attempts to use the provided
+		`debugging_port` if available, or finds a minimum free port if no port is provided or the provided port is in use.
+
+		Args:
+			debugging_port (Optional[int]): Requested debugging port number. If provided, the method attempts to use this port. Defaults to None.
+
+		Returns:
+			int: The debugging port number to use. This is either a reused port from a previous session, the provided port if available, or a newly found free port.
+		"""
+		
+		if self.browser_exe is not None:
+			user_data_dir_command = self._webdriver_flags_manager._flags_definitions.get("user_data_dir", None)
+			user_data_dir_value = self._webdriver_flags_manager._arguments.get("user_data_dir", None)
+			user_data_dir = None if user_data_dir_command is None else user_data_dir_value["value"]
+		
+			if user_data_dir_command is not None:
+				previous_session = find_browser_previous_session(self.browser_exe, user_data_dir_command["command"], user_data_dir)
+		
+				if previous_session is not None:
+					return previous_session
+		
+		if debugging_port is not None:
+			return get_localhost_minimum_free_port(
+					console_encoding=self._console_encoding,
+					ip_pattern=self._ip_pattern,
+					ports_to_check=debugging_port
+			)
+		
+		if self.debugging_port is None or self.debugging_port == 0:
+			return get_localhost_minimum_free_port(
+					console_encoding=self._console_encoding,
+					ip_pattern=self._ip_pattern,
+					ports_to_check=self.debugging_port
+			)
+		
+		return self.debugging_port
+	
+	def _set_debugging_port(self, debugging_port: Optional[int], debugging_address: Optional[str]):
+		"""
+		Sets the debugging port and address.
+
+		Configures the browser to start with a specific debugging port. This port is used for external tools,
+		like debuggers or browser automation frameworks, to connect to and control the browser instance.
+		Setting a fixed debugging port can be useful for consistent remote debugging or automation setups.
+
+		Args:
+			debugging_port (Optional[int]): Debugging port number. If None or 0, the browser chooses a port automatically.
+			debugging_address (Optional[str]): The IP address for the debugger to listen on. Defaults to '127.0.0.1'.
+		"""
+		
+		if self.browser_exe is not None:
+			_debugging_address = "127.0.0.1" if debugging_address is None else debugging_address
+			_debugging_port = 0 if debugging_port is None else debugging_port
+		
+			self._webdriver_flags_manager.update_flags(
+					BlinkFlags(
+							argument=BlinkArguments(
+									remote_debugging_port=debugging_port,
+									remote_debugging_address=debugging_address
+							),
+							experimental_option=BlinkExperimentalOptions(debugger_address=f"{_debugging_address}:{_debugging_port}"),
+					)
+			)
+	
+	@property
+	def debugging_ip(self) -> Optional[str]:
+		"""
+		Gets the IP address part of the debugger address.
+
+		Returns:
+			Optional[str]: The IP address of the debugger, or None if not set.
+		"""
+		
+		return self._webdriver_flags_manager._arguments.get("remote_debugging_address", {}).get("value", None)
 	
 	def set_start_page_url(self, start_page_url: str):
 		"""
@@ -2046,7 +2151,7 @@ class BlinkWebDriver(BrowserWebDriver):
 			self.set_start_page_url(start_page_url)
 			self.set_trio_tokens_limit(trio_tokens_limit)
 			self._window_rect = window_rect
-
+		
 			if self.browser_exe is not None and self.debugging_port is not None or self.debugging_ip is not None:
 				self._set_debugging_port(self._find_debugging_port(self.debugging_port), self.debugging_ip)
 		else:
@@ -2065,54 +2170,6 @@ class BlinkWebDriver(BrowserWebDriver):
 		
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
-	@property
-	def debugging_port(self) -> Optional[int]:
-		"""
-		Gets the currently set debugging port.
-
-		Retrieves the debugging port number that the browser instance is configured to use.
-
-		Returns:
-			Optional[int]: The debugging port number, or None if not set.
-		"""
-		
-		return self._webdriver_flags_manager._arguments.get("remote_debugging_port", {}).get("value", None)
-	
-	@property
-	def browser_exe(self) -> Optional[Union[str, pathlib.Path]]:
-		"""
-		Gets the path to the browser executable.
-
-		Returns:
-			Optional[Union[str, pathlib.Path]]: The path to the browser executable.
-		"""
-		
-		return self._webdriver_flags_manager.browser_exe
-	
-	def _set_debugging_port(self, debugging_port: Optional[int], debugging_address: Optional[str]):
-		"""
-		Sets the debugging port and address.
-
-		Configures the browser to start with a specific debugging port. This port is used for external tools,
-		like debuggers or browser automation frameworks, to connect to and control the browser instance.
-		Setting a fixed debugging port can be useful for consistent remote debugging or automation setups.
-
-		Args:
-			debugging_port (Optional[int]): Debugging port number. If None or 0, the browser chooses a port automatically.
-			debugging_address (Optional[str]): The IP address for the debugger to listen on. Defaults to '127.0.0.1'.
-		"""
-		
-		if self.browser_exe is not None:
-			_debugging_address = "127.0.0.1" if debugging_address is None else debugging_address
-			_debugging_port = 0 if debugging_port is None else debugging_port
-		
-			self._webdriver_flags_manager.update_flags(
-					BlinkFlags(
-							argument=BlinkArguments(remote_debugging_port=debugging_port, remote_debugging_address=debugging_address),
-							experimental_option=BlinkExperimentalOptions(debugger_address=f"{_debugging_address}:{_debugging_port}"),
-					)
-			)
-	
 	def _check_browser_exe_active(self) -> bool:
 		"""
 		Checks if the WebDriver is active by verifying if the debugging port is in use.
@@ -2128,7 +2185,7 @@ class BlinkWebDriver(BrowserWebDriver):
 		for pid, ports in get_localhost_pids_with_addresses(console_encoding=self._console_encoding, ip_pattern=self._ip_pattern).items():
 			if len(ports) == 1 and re.search(rf":{self.debugging_port}\Z", ports[0]) is not None:
 				address = re.search(rf"\A(.+):{self.debugging_port}\Z", ports[0]).group(1)
-
+		
 				if address != self.debugging_ip:
 					self._set_debugging_port(
 							debugging_port=self.debugging_port,
@@ -2138,60 +2195,6 @@ class BlinkWebDriver(BrowserWebDriver):
 				return True
 		
 		return False
-	
-	@property
-	def debugging_ip(self) -> Optional[str]:
-		"""
-		Gets the IP address part of the debugger address.
-
-		Returns:
-			Optional[str]: The IP address of the debugger, or None if not set.
-		"""
-		
-		return self._webdriver_flags_manager._arguments.get("remote_debugging_address", {}).get("value", None)
-	
-	def _find_debugging_port(self, debugging_port: Optional[int]) -> int:
-		"""
-		Finds an appropriate debugging port, either reusing a previous session's port or finding a free port.
-
-		Attempts to locate a suitable debugging port for the browser. It first tries to reuse a debugging port
-		from a previous browser session if a profile directory is specified and a previous session is found.
-		If no previous session is found or if no profile directory is specified, it attempts to use the provided
-		`debugging_port` if available, or finds a minimum free port if no port is provided or the provided port is in use.
-
-		Args:
-			debugging_port (Optional[int]): Requested debugging port number. If provided, the method attempts to use this port. Defaults to None.
-
-		Returns:
-			int: The debugging port number to use. This is either a reused port from a previous session, the provided port if available, or a newly found free port.
-		"""
-		
-		if self.browser_exe is not None:
-			user_data_dir_command = self._webdriver_flags_manager._flags_definitions.get("user_data_dir", None)
-			user_data_dir_value = self._webdriver_flags_manager._arguments.get("user_data_dir", None)
-			user_data_dir = None if user_data_dir_command is None else user_data_dir_value["value"]
-		
-			if user_data_dir_command is not None:
-				previous_session = find_browser_previous_session(self.browser_exe, user_data_dir_command["command"], user_data_dir)
-		
-				if previous_session is not None:
-					return previous_session
-		
-		if debugging_port is not None:
-			return get_localhost_minimum_free_port(
-					console_encoding=self._console_encoding,
-					ip_pattern=self._ip_pattern,
-					ports_to_check=debugging_port
-			)
-		
-		if self.debugging_port is None or self.debugging_port == 0:
-			return get_localhost_minimum_free_port(
-					console_encoding=self._console_encoding,
-					ip_pattern=self._ip_pattern,
-					ports_to_check=self.debugging_port
-			)
-		
-		return self.debugging_port
 	
 	def update_settings(
 			self,

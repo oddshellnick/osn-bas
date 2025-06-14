@@ -9,7 +9,10 @@ from typing import (
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from osn_bas.browsers_handler import get_path_to_browser
-from osn_bas.webdrivers.BaseDriver.webdriver import BlinkWebDriver, CaptchaWorkerSettings
+from osn_bas.webdrivers.BaseDriver.webdriver import (
+	BlinkWebDriver,
+	CaptchaWorkerSettings
+)
 from osn_bas.webdrivers.BaseDriver.flags import (
 	BlinkArguments,
 	BlinkAttributes,

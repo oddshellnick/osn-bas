@@ -18,14 +18,6 @@ from osn_bas.webdrivers.types import (
 )
 
 
-_any_webdriver_option_type = Union[
-	webdriver.ChromeOptions,
-	webdriver.EdgeOptions,
-	webdriver.FirefoxOptions
-]
-_blink_webdriver_option_type = Union[webdriver.ChromeOptions, webdriver.EdgeOptions]
-
-
 def _str_adding_validation_function(value: Optional[str]) -> bool:
 	"""
 	Validation function that checks if a value is a non-empty string.
@@ -134,7 +126,7 @@ class FlagType(TypedDict):
 	set_flags_function: Callable[[dict[str, Any]], None]
 	update_flags_function: Callable[[dict[str, Any]], None]
 	clear_flags_function: Callable[[], None]
-	build_options_function: Callable[[_any_webdriver_option_type], _any_webdriver_option_type]
+	build_options_function: Callable[["_any_webdriver_option_type"], "_any_webdriver_option_type"]
 	build_start_args_function: Callable[[], list[str]]
 
 
@@ -396,7 +388,7 @@ class BrowserFlagsManager:
 		self._experimental_options: dict[str, ExperimentalOptionValue] = {}
 		self._attributes: dict[str, AttributeValue] = {}
 	
-	def build_options_attributes(self, options: _any_webdriver_option_type) -> _any_webdriver_option_type:
+	def build_options_attributes(self, options: "_any_webdriver_option_type") -> "_any_webdriver_option_type":
 		"""
 		Applies configured attributes to the WebDriver options object.
 
@@ -484,7 +476,7 @@ class BrowserFlagsManager:
 		self.clear_attributes()
 		self.update_attributes(attributes)
 	
-	def build_options_experimental_options(self, options: _any_webdriver_option_type) -> _any_webdriver_option_type:
+	def build_options_experimental_options(self, options: "_any_webdriver_option_type") -> "_any_webdriver_option_type":
 		"""
 		Adds configured experimental options to the WebDriver options object.
 
@@ -595,7 +587,7 @@ class BrowserFlagsManager:
 			if self._flags_definitions_by_types["argument"][name]["mode"] in ["startup_argument", "both"]
 		]
 	
-	def build_options_arguments(self, options: _any_webdriver_option_type) -> _any_webdriver_option_type:
+	def build_options_arguments(self, options: "_any_webdriver_option_type") -> "_any_webdriver_option_type":
 		"""
 		Adds configured command-line arguments to the WebDriver options object.
 
@@ -689,7 +681,7 @@ class BrowserFlagsManager:
 		for type_name, type_functions in self._flags_types.items():
 			type_functions["clear_flags_function"]()
 	
-	def _renew_webdriver_options(self) -> _any_webdriver_option_type:
+	def _renew_webdriver_options(self) -> "_any_webdriver_option_type":
 		"""
 		Abstract method to renew WebDriver options. Must be implemented in child classes.
 
@@ -706,7 +698,7 @@ class BrowserFlagsManager:
 		raise NotImplementedError("This function must be implemented in child classes.")
 	
 	@property
-	def options(self) -> _any_webdriver_option_type:
+	def options(self) -> "_any_webdriver_option_type":
 		"""
 		Builds and returns a WebDriver options object with all configured flags applied.
 
@@ -1518,7 +1510,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		
 		return start_args
 	
-	def build_options_blink_features(self, options: _blink_webdriver_option_type) -> _blink_webdriver_option_type:
+	def build_options_blink_features(self, options: "_blink_webdriver_option_type") -> "_blink_webdriver_option_type":
 		"""
 		Adds configured Blink features (`--enable-blink-features` and `--disable-blink-features`) to the WebDriver options.
 
@@ -1623,7 +1615,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		self.clear_blink_features()
 		self.update_blink_features(blink_features)
 	
-	def _renew_webdriver_options(self) -> _blink_webdriver_option_type:
+	def _renew_webdriver_options(self) -> "_blink_webdriver_option_type":
 		"""
 		Abstract method to renew WebDriver options. Must be implemented in child classes.
 
@@ -1663,7 +1655,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		
 		self._browser_exe = value
 	
-	def build_options_arguments(self, options: _blink_webdriver_option_type) -> _blink_webdriver_option_type:
+	def build_options_arguments(self, options: "_blink_webdriver_option_type") -> "_blink_webdriver_option_type":
 		"""
 		Adds configured command-line arguments to the WebDriver options.
 
@@ -1676,7 +1668,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		
 		return super().build_options_arguments(options)
 	
-	def build_options_attributes(self, options: _blink_webdriver_option_type) -> _blink_webdriver_option_type:
+	def build_options_attributes(self, options: "_blink_webdriver_option_type") -> "_blink_webdriver_option_type":
 		"""
 		Applies configured attributes to the WebDriver options.
 
@@ -1689,7 +1681,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		
 		return super().build_options_attributes(options)
 	
-	def build_options_experimental_options(self, options: _blink_webdriver_option_type) -> _blink_webdriver_option_type:
+	def build_options_experimental_options(self, options: "_blink_webdriver_option_type") -> "_blink_webdriver_option_type":
 		"""
 		Adds experimental options to the WebDriver options.
 
@@ -1719,7 +1711,7 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		self._start_page_url = None
 	
 	@property
-	def options(self) -> _blink_webdriver_option_type:
+	def options(self) -> "_blink_webdriver_option_type":
 		"""
 		Builds and returns a Blink-specific WebDriver options object.
 
@@ -1900,3 +1892,11 @@ class BlinkFlagsManager(BrowserFlagsManager):
 		"""
 		
 		super().update_flags(flags)
+
+
+_any_webdriver_option_type = Union[
+	webdriver.ChromeOptions,
+	webdriver.EdgeOptions,
+	webdriver.FirefoxOptions
+]
+_blink_webdriver_option_type = Union[webdriver.ChromeOptions, webdriver.EdgeOptions]

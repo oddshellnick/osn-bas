@@ -6,7 +6,8 @@ import functools
 from typing import (
 	Any,
 	Callable,
-	Literal, TYPE_CHECKING
+	Literal,
+	TYPE_CHECKING
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	WrongHandlerSettingsError,
@@ -39,7 +40,7 @@ def warn_if_active(func: Callable) -> Callable:
 	def wrapper(self: "DevTools", *args, **kwargs):
 		if self.is_active:
 			warnings.warn("DevTools is active. Exit dev_tools context before changing settings.")
-
+		
 		return func(self, *args, **kwargs)
 	
 	return wrapper
@@ -90,7 +91,7 @@ def validate_handler_settings(handler_settings: dict[str, Any]) -> Literal["clas
 	
 	if "function_to_use_path" in handler_settings:
 		return "function"
-
+	
 	raise ValueError("Wrong handler settings.")
 
 
