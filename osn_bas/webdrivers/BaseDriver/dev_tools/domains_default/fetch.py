@@ -1,3 +1,4 @@
+import trio
 import logging
 from typing import (
 	Any,
@@ -69,6 +70,7 @@ class HeaderInstance(TypedDict):
 
 async def headers_handler(
 		self: "DevTools",
+		ready_event: trio.Event,
 		headers_instances: dict[str, HeaderInstance],
 		event: Any,
 		kwargs: dict[str, Any]
@@ -88,7 +90,7 @@ async def headers_handler(
 		kwargs (dict[str, Any]): A dictionary of arguments that will be passed to the CDP command (e.g., `continue_request`). This dictionary is modified in place.
 	"""
 	
-	header_entry_class = self._get_devtools_object("fetch.HeaderEntry")
+	header_entry_class = self.get_devtools_object("fetch.HeaderEntry")
 	headers = {name: value for name, value in event.request.headers.items()}
 	
 	for name, instance in headers_instances.items():
@@ -115,6 +117,8 @@ async def headers_handler(
 		header_entry_class(name=name, value=value)
 		for name, value in headers.items()
 	]
+	
+	ready_event.set()
 
 
 def auth_required_choose_func(self: "DevTools", event: Any) -> list["auth_required_actions_literal"]:

@@ -160,47 +160,45 @@ import trio
 from osn_bas.webdrivers.Chrome import ChromeWebDriver
 # Import necessary types for DevTools configuration
 from osn_bas.webdrivers.BaseDriver.dev_tools.domains.fetch import HeaderInstance
-
 async def test_devtools_interception():
-    # enable_devtools=True is MANDATORY for DevTools
-    driver = ChromeWebDriver(webdriver_path="path/to/chromedriver", enable_devtools=True)
-    # Start the driver *before* setting DevTools handlers
-    driver.start_webdriver()
+	# enable_devtools=True is MANDATORY for DevTools
+	driver = ChromeWebDriver(webdriver_path="path/to/chromedriver", enable_devtools=True)
+	# Start the driver *before* setting DevTools handlers
+	driver.start_webdriver()
 
-    # Configure the request handler before entering the async context
-    driver.dev_tools.set_request_paused_handler(
-        headers_instances={
-            # Add/Set a custom header for all requests
-            "X-Modified-By": HeaderInstance(value="osn-bas-DevTools", instruction="set"),
-            # Remove the User-Agent header
-            "User-Agent": HeaderInstance(value="", instruction="remove")
-        }
-        # You can also provide custom post_data_handler and headers_handler functions
-    )
+	# Configure the request handler before entering the async context
+	driver.dev_tools.set_request_paused_handler(
+			headers_instances={
+				# Add/Set a custom header for all requests
+				"X-Modified-By": HeaderInstance(value="osn-bas-DevTools", instruction="set"),
+				# Remove the User-Agent header
+				"User-Agent": HeaderInstance(value="", instruction="remove")
+			}
+			# You can also provide custom post_data_handler and headers_handler functions
+	)
 
-    print("Entering DevTools context...")
-    # Use the async context manager for DevTools
-    async with driver.dev_tools as driver_wrapper:
-        print("Navigating with DevTools active...")
-        # Use the wrapped driver for async operations inside the context
-        await driver_wrapper.search_url("https://httpbin.org/headers") # httpbin reflects request headers
+	print("Entering DevTools context...")
+	# Use the async context manager for DevTools
+	async with driver.dev_tools as driver_wrapper:
+		print("Navigating with DevTools active...")
+		# Use the wrapped driver for async operations inside the context
+		await driver_wrapper.search_url("https://httpbin.org/headers")  # httpbin reflects request headers
 
-        # Get page source to see the result
-        page_source = driver_wrapper.html
-        print("\nPage Source (showing modified headers):")
-        print(page_source) # Look for "X-Modified-By" and the absence of "User-Agent"
+		# Get page source to see the result
+		page_source = driver_wrapper.html
+		print("\nPage Source (showing modified headers):")
+		print(page_source)  # Look for "X-Modified-By" and the absence of "User-Agent"
 
-        # Perform other async actions if needed
-        await trio.sleep(1)
+		# Perform other async actions if needed
+		await trio.sleep(1)
 
-    print("Exited DevTools context. Listeners stopped.")
+	print("Exited DevTools context. Listeners stopped.")
 
-    # Close the driver outside the async context
-    driver.close_webdriver()
-    print("WebDriver closed.")
-
+	# Close the driver outside the async context
+	driver.close_webdriver()
+	print("WebDriver closed.")
 # Run the async function using trio
-trio.run(test_devtools_interception,)
+trio.run(test_devtools_interception, )
 ```
 
 ## Classes and Functions

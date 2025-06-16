@@ -108,16 +108,24 @@ async def _build_kwargs_from_handlers_func(
 	
 	kwargs = {"request_id": event.request_id}
 	
-	async with trio.open_nursery() as nursery:
-		for handler_name, handler_settings in handlers.items():
-			if handler_settings is not None:
-				nursery.start_soon(
-						handler_settings["func"],
-						self,
-						handler_settings["instances"],
-						event,
-						kwargs
-				)
+	kwargs_ready_events: list[trio.Event] = []
+	
+	for handler_name, handler_settings in handlers.items():
+		if handler_settings is not None:
+			kwargs_ready_event = trio.Event()
+			kwargs_ready_events.append(kwargs_ready_event)
+	
+			self._nursery_object.start_soon(
+					handler_settings["func"],
+					self,
+					kwargs_ready_event,
+					handler_settings["instances"],
+					event,
+					kwargs
+			)
+	
+	for kwargs_ready_event in kwargs_ready_events:
+		await kwargs_ready_event.wait()
 	
 	return kwargs
 
@@ -255,10 +263,10 @@ async def _handle_auth_required(
 		cache_func = chosen_func["response_handle_func"]
 	
 		try:
-			response = await cdp_session.execute(self._get_devtools_object(f"fetch.{func_name}")(**kwargs))
+			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{func_name}")(**kwargs))
 	
 			if cache_func is not None:
-				await cache_func(self, response)
+				self._nursery_object.start_soon(cache_func, self, response)
 		except (Exception,) as error:
 			on_error = handler_settings["on_error"]
 	
@@ -496,10 +504,10 @@ async def _handle_request_paused(
 		cache_func = chosen_func["response_handle_func"]
 	
 		try:
-			response = await cdp_session.execute(self._get_devtools_object(f"fetch.{func_name}")(**kwargs))
+			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{func_name}")(**kwargs))
 	
 			if cache_func is not None:
-				await cache_func(self, response)
+				self._nursery_object.start_soon(cache_func, self, response)
 		except (Exception,) as error:
 			on_error = handler_settings["on_error"]
 	
@@ -956,7 +964,7 @@ request_paused_choose_func_type = Callable[["DevTools", Any], list[request_pause
 auth_required_choose_func_type = Callable[["DevTools", Any], list[auth_required_actions_literal]]
 handle_request_paused_func_type = Callable[["DevTools", CdpSession, _RequestPaused, Any], Awaitable[None]]
 handle_auth_required_func_type = Callable[["DevTools", CdpSession, _AuthRequired, Any], Awaitable[None]]
-parameter_handler_type = Callable[["DevTools", Any, Any, dict[str, Any]], Awaitable[None]]
+parameter_handler_type = Callable[["DevTools", trio.Event, Any, Any, dict[str, Any]], Awaitable[None]]
 kwargs_output_type = Awaitable[dict[str, Any]]
 response_handle_func_type = Optional[Callable[["DevTools", Any], Awaitable[Any]]]
 on_error_type = Callable[["DevTools", Any, Exception], None]
