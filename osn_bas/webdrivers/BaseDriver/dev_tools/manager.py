@@ -22,13 +22,12 @@ from typing import (
 	Union,
 	cast
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
-	CantEnterDevToolsContextError
-)
 from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
 	log_on_error,
-	validate_handler_settings,
 	warn_if_active
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
+	CantEnterDevToolsContextError
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
 	Domains,
@@ -93,30 +92,23 @@ class DevTools:
 		self.main_lock = trio.Lock()
 		self.exit_event: Optional[trio.Event] = None
 	
-	async def _start_listeners(self, cdp_session: CdpSession, listeners_started_event: trio.Event):
-		"""
-		Starts all configured DevTools event listeners.
-
-		This method initiates listeners for all domains configured in `_domains_settings`.
-		It enables target discovery, starts a nursery task to process new targets, enables
-		each configured domain, and starts the individual event listeners.
-
-		Args:
-			cdp_session (CdpSession): The CDP session object to use for starting listeners.
-		"""
-		
+	async def _setup_target(self, cdp_session: CdpSession, target_setup: trio.Event):
 		try:
 			await cdp_session.execute(self.get_devtools_object("target.set_discover_targets")(True))
 			await cdp_session.execute(
 					self.get_devtools_object("target.set_auto_attach")(auto_attach=True, wait_for_debugger_on_start=True, flatten=True,)
 			)
 		
-			listeners_ready_events: list[trio.Event] = []
+			target_ready_events: list[trio.Event] = []
 		
-			listener_ready_event = trio.Event()
-			listeners_ready_events.append(listener_ready_event)
+			new_targets_listener_ready_event = trio.Event()
+			target_ready_events.append(new_targets_listener_ready_event)
 		
-			self._nursery_object.start_soon(self._process_new_targets, cdp_session, listener_ready_event)
+			self._nursery_object.start_soon(
+					self._run_new_targets_listener,
+					cdp_session,
+					new_targets_listener_ready_event
+			)
 		
 			for domain_name, domain_config in self._domains_settings.items():
 				if domain_config.get("enable_func_path", None) is not None:
@@ -125,31 +117,25 @@ class DevTools:
 							self.get_devtools_object(domain_config["enable_func_path"])(**enable_func_kwargs)
 					)
 		
-				for event_name, event_config in domain_config["handlers"].items():
-					if event_config is not None:
-						handler_type = validate_handler_settings(event_config)
+				domain_handlers_ready_event = trio.Event()
+				target_ready_events.append(domain_handlers_ready_event)
+				self._nursery_object.start_soon(
+						self._run_events_handlers,
+						cdp_session,
+						domain_handlers_ready_event,
+						domain_config
+				)
 		
-						listener_ready_event = trio.Event()
-						listeners_ready_events.append(listener_ready_event)
-		
-						if handler_type == "class":
-							self._nursery_object.start_soon(
-									self._run_event_listener,
-									cdp_session,
-									listener_ready_event,
-									event_config
-							)
-		
-			for listener_ready_event in listeners_ready_events:
-				await listener_ready_event.wait()
+			for domain_handlers_ready_event in target_ready_events:
+				await domain_handlers_ready_event.wait()
 		
 			await cdp_session.execute(self.get_devtools_object("runtime.run_if_waiting_for_debugger")())
 		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 		finally:
-			listeners_started_event.set()
+			target_setup.set()
 	
-	async def _process_new_targets(self, cdp_session: CdpSession, ready_event: trio.Event):
+	async def _run_new_targets_listener(self, cdp_session: CdpSession, ready_event: trio.Event):
 		"""
 		Processes new browser targets as they are created.
 
@@ -191,7 +177,7 @@ class DevTools:
 			if await self._add_target_id(target_id):
 				async with self._new_session_manager(target_id) as new_session:
 					listeners_started_event = trio.Event()
-					await self._start_listeners(new_session, listeners_started_event)
+					await self._setup_target(new_session, listeners_started_event)
 					await listeners_started_event.wait()
 		
 					await self.exit_event.wait()
@@ -229,10 +215,10 @@ class DevTools:
 		
 		return object_
 	
-	async def _run_event_listener(
+	async def _run_event_handler(
 			self,
 			cdp_session: CdpSession,
-			listener_ready_event: trio.Event,
+			domain_handler_ready_event: trio.Event,
 			event_config: AbstractEvent
 	):
 		"""
@@ -244,7 +230,7 @@ class DevTools:
 
 		Args:
 			cdp_session (CdpSession): The CDP session to listen on.
-			event_config (AbstractEvent): The configuration for the event listener.
+			event_config (AbstractDomainClass): The configuration for the event listener.
 		"""
 		
 		try:
@@ -259,9 +245,10 @@ class DevTools:
 			)
 		
 			logging.log(logging.ERROR, error)
+		
 			return
 		finally:
-			listener_ready_event.set()
+			domain_handler_ready_event.set()
 		
 		handler = event_config["handle_function"]
 		
@@ -278,6 +265,31 @@ class DevTools:
 				)
 		
 				logging.log(logging.ERROR, error)
+	
+	async def _run_events_handlers(
+			self,
+			cdp_session: CdpSession,
+			events_ready_event: trio.Event,
+			domain_config
+	) -> None:
+		events_handlers_ready_events: list[trio.Event] = []
+		
+		for event_name, event_config in domain_config.get("handlers", {}).items():
+			if event_config is not None:
+				event_handler_ready_event = trio.Event()
+				events_handlers_ready_events.append(event_handler_ready_event)
+		
+				self._nursery_object.start_soon(
+						self._run_event_handler,
+						cdp_session,
+						event_handler_ready_event,
+						event_config
+				)
+		
+		for event_handler_ready_event in events_handlers_ready_events:
+			await event_handler_ready_event.wait()
+		
+		events_ready_event.set()
 	
 	async def _remove_target_id(self, target_id: str):
 		async with self.main_lock:
@@ -372,7 +384,7 @@ class DevTools:
 		self.exit_event = trio.Event()
 		
 		listeners_started_event = trio.Event()
-		await self._start_listeners(self.main_cdp_session, listeners_started_event)
+		await self._setup_target(self.main_cdp_session, listeners_started_event)
 		await listeners_started_event.wait()
 		
 		self._is_active = True

@@ -75,21 +75,6 @@ async def headers_handler(
 		event: Any,
 		kwargs: dict[str, Any]
 ):
-	"""
-	Handles the modification of request headers based on a set of instructions.
-
-	This function iterates through a dictionary of header modification instructions and
-	applies them to the request's headers. The modified headers are then added to the
-	`kwargs` dictionary, which is used to continue the request. This function modifies
-	the `kwargs` dictionary in place.
-
-	Args:
-		self (DevTools): The DevTools instance.
-		headers_instances (dict[str, HeaderInstance]): A dictionary where keys are header names and values are `HeaderInstance` objects defining the modifications.
-		event (Any): The `request_paused` event object.
-		kwargs (dict[str, Any]): A dictionary of arguments that will be passed to the CDP command (e.g., `continue_request`). This dictionary is modified in place.
-	"""
-	
 	header_entry_class = self.get_devtools_object("fetch.HeaderEntry")
 	headers = {name: value for name, value in event.request.headers.items()}
 	

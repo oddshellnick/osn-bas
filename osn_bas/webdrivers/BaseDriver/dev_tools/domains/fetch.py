@@ -21,14 +21,6 @@ if TYPE_CHECKING:
 
 
 class _FetchEnableKwargs(TypedDict, total=False):
-	"""
-	Internal TypedDict for keyword arguments to enable the Fetch domain.
-
-	Attributes:
-		patterns (Optional[list[Any]]): A list of request patterns to intercept.
-		handle_auth_requests (Optional[bool]): Whether to intercept authentication requests.
-	"""
-	
 	patterns: Optional[list[Any]]
 	handle_auth_requests: Optional[bool]
 
@@ -46,7 +38,7 @@ class ParameterHandler(TypedDict):
 	instances: Any
 
 
-class _ContinueWithAuthHandlers(TypedDict):
+class _ContinueWithAuthParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'continueWithAuth' action.
 
@@ -62,24 +54,15 @@ class _ContinueWithAuthHandlers(TypedDict):
 
 
 @dataclass
-class ContinueWithAuthHandlersSettings:
-	"""
-	Configuration for handlers that provide authentication credentials.
-
-	Attributes:
-		response (ParameterHandler): Handler for the auth challenge response.
-		username (Optional[ParameterHandler]): Handler for providing the username. Defaults to None.
-		password (Optional[ParameterHandler]): Handler for providing the password. Defaults to None.
-	"""
-	
+class ContinueWithAuthParameterHandlersSettings:
 	response: ParameterHandler
 	username: Optional[ParameterHandler] = None
 	password: Optional[ParameterHandler] = None
 	
-	def to_dict(self) -> _ContinueWithAuthHandlers:
+	def to_dict(self) -> _ContinueWithAuthParametersHandlers:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _ContinueWithAuthHandlers(
+		return _ContinueWithAuthParametersHandlers(
 				response=self.response,
 				username=self.username,
 				password=self.password,
@@ -90,7 +73,7 @@ async def _build_kwargs_from_handlers_func(
 		self: "DevTools",
 		handlers: dict[str, Optional[ParameterHandler]],
 		event: Any
-) -> dict[str, Any]:
+) -> "kwargs_type":
 	"""
 	Asynchronously builds a dictionary of arguments by executing multiple handlers.
 
@@ -103,7 +86,7 @@ async def _build_kwargs_from_handlers_func(
 		event (Any): The CDP event that triggered the handlers.
 
 	Returns:
-		dict[str, Any]: A dictionary of keyword arguments built from the handlers' outputs.
+		"kwargs_type": A dictionary of keyword arguments built from the handlers' outputs.
 	"""
 	
 	kwargs = {"request_id": event.request_id}
@@ -137,12 +120,12 @@ class _ContinueWithAuth(TypedDict):
 	Attributes:
 		kwargs_func (build_kwargs_from_handlers_func_type): Function to build keyword arguments.
 		response_handle_func (response_handle_func_type): A function to process the response from the CDP command.
-		handlers (_ContinueWithAuthHandlers): Handlers for authentication parameters.
+		parameters_handlers (_ContinueWithAuthParametersHandlers): Handlers for authentication parameters.
 	"""
 	
 	kwargs_func: "build_kwargs_from_handlers_func_type"
 	response_handle_func: "response_handle_func_type"
-	handlers: _ContinueWithAuthHandlers
+	parameters_handlers: _ContinueWithAuthParametersHandlers
 
 
 @dataclass
@@ -151,11 +134,11 @@ class ContinueWithAuthSettings:
 	Settings for continuing a request that requires authentication.
 
 	Attributes:
-		auth_challenge_response (ContinueWithAuthHandlersSettings): Settings for the handlers that provide authentication credentials.
+		auth_challenge_response (ContinueWithAuthParameterHandlersSettings): Settings for the handlers that provide authentication credentials.
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the CDP command. Defaults to None.
 	"""
 	
-	auth_challenge_response: ContinueWithAuthHandlersSettings
+	auth_challenge_response: ContinueWithAuthParameterHandlersSettings
 	response_handle_func: "response_handle_func_type" = None
 	
 	@property
@@ -170,35 +153,37 @@ class ContinueWithAuthSettings:
 		return _ContinueWithAuth(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				handlers=self.auth_challenge_response.to_dict(),
+				parameters_handlers=self.auth_challenge_response.to_dict(),
 		)
 
 
-class _AuthRequiredCallbacks(TypedDict):
-	"""
-	Internal TypedDict for callbacks of the 'AuthRequired' event.
-
-	Attributes:
-		choose_func (auth_required_choose_func_type): Function to decide the action to take.
-		continue_with_auth (Optional[_ContinueWithAuth]): Configuration for the 'continueWithAuth' action.
-	"""
-	
-	choose_func: "auth_required_choose_func_type"
+class _AuthRequiredActions(TypedDict, total=False):
 	continue_with_auth: Optional[_ContinueWithAuth]
 
 
 @dataclass
-class AuthRequiredCallbacksSettings:
-	"""
-	Configuration for callbacks that handle authentication-required events.
-
-	Attributes:
-		choose_func (auth_required_choose_func_type): A function that decides which action to take. Defaults to `auth_required_choose_func`.
-		continue_with_auth (Optional[ContinueWithAuthSettings]): Settings for the 'continueWithAuth' action. Defaults to None.
-	"""
-	
-	choose_func: "auth_required_choose_func_type" = auth_required_choose_func
+class AuthRequiredActionsSettings:
 	continue_with_auth: Optional[ContinueWithAuthSettings] = None
+	
+	def to_dict(self) -> _AuthRequiredActions:
+		"""Converts the settings object to its dictionary representation."""
+		
+		return _AuthRequiredActions(
+				continue_with_auth=self.continue_with_auth.to_dict()
+				if self.continue_with_auth is not None
+				else None,
+		)
+
+
+class _AuthRequiredActionsHandler(TypedDict):
+	choose_action_func: "auth_required_choose_action_func_type"
+	actions: _AuthRequiredActions
+
+
+@dataclass
+class AuthRequiredActionsHandlerSettings:
+	choose_action_func: "auth_required_choose_action_func_type" = auth_required_choose_func
+	actions: Optional[AuthRequiredActionsSettings] = AuthRequiredActionsSettings()
 	
 	@property
 	def kwargs_func(self) -> "build_kwargs_from_handlers_func_type":
@@ -206,14 +191,12 @@ class AuthRequiredCallbacksSettings:
 		
 		return _build_kwargs_from_handlers_func
 	
-	def to_dict(self) -> _AuthRequiredCallbacks:
+	def to_dict(self) -> _AuthRequiredActionsHandler:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _AuthRequiredCallbacks(
-				choose_func=self.choose_func,
-				continue_with_auth=self.continue_with_auth.to_dict()
-				if self.continue_with_auth is not None
-				else None,
+		return _AuthRequiredActionsHandler(
+				choose_action_func=self.choose_action_func,
+				actions=self.actions.to_dict(),
 		)
 
 
@@ -225,15 +208,15 @@ class _AuthRequired(TypedDict):
 		class_to_use_path (str): Path to the CDP event class.
 		listen_buffer_size (int): Buffer size for the listener channel.
 		handle_function (handle_auth_required_func_type): The main handler function for the event.
-		callbacks (_AuthRequiredCallbacks): Callbacks specific to this event.
-		on_error (Optional[on_error_type]): Function to call on error.
+		actions_handler (_AuthRequiredActionsHandler): Callbacks specific to this event.
+		on_error_func (on_error_type): Function to call on error.
 	"""
 	
 	class_to_use_path: str
 	listen_buffer_size: int
 	handle_function: "handle_auth_required_func_type"
-	callbacks: _AuthRequiredCallbacks
-	on_error: Optional["on_error_type"]
+	actions_handler: _AuthRequiredActionsHandler
+	on_error_func: "on_error_func_type"
 
 
 async def _handle_auth_required(
@@ -255,20 +238,20 @@ async def _handle_auth_required(
 		event (Any): The 'fetch.AuthRequired' event object.
 	"""
 	
-	chosen_func_names = handler_settings["callbacks"]["choose_func"](self, event)
+	chosen_func_names = handler_settings["actions_handler"]["choose_action_func"](self, event)
 	
 	for func_name in chosen_func_names:
-		chosen_func = handler_settings["callbacks"][func_name]
-		kwargs = await chosen_func["kwargs_func"](self, chosen_func["handlers"], event)
-		cache_func = chosen_func["response_handle_func"]
+		chosen_func = handler_settings["actions_handler"]["actions"][func_name]
+		kwargs = await chosen_func["kwargs_func"](self, chosen_func["parameters_handlers"], event)
+		response_handle_func = chosen_func["response_handle_func"]
 	
 		try:
 			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{func_name}")(**kwargs))
 	
-			if cache_func is not None:
-				self._nursery_object.start_soon(cache_func, self, response)
+			if response_handle_func is not None:
+				self._nursery_object.start_soon(response_handle_func, self, response)
 		except (Exception,) as error:
-			on_error = handler_settings["on_error"]
+			on_error = handler_settings["on_error_func"]
 	
 			if on_error is not None:
 				on_error(self, event, error)
@@ -280,14 +263,14 @@ class AuthRequiredSettings:
 	Settings for handling the 'fetch.AuthRequired' event.
 
 	Attributes:
-		callbacks (AuthRequiredCallbacksSettings): Configuration for the event's callbacks.
+		actions_handler (AuthRequiredActionsHandlerSettings): Configuration for the event's actions_handler.
 		listen_buffer_size (int): The buffer size for the event listener channel. Defaults to 10.
-		on_error (Optional[on_error_type]): An optional function to call on error. Defaults to None.
+		on_error_func (on_error_type): An optional function to call on error. Defaults to None.
 	"""
 	
-	callbacks: AuthRequiredCallbacksSettings
+	actions_handler: AuthRequiredActionsHandlerSettings
 	listen_buffer_size: int = 10
-	on_error: Optional["on_error_type"] = None
+	on_error_func: "on_error_func_type" = None
 	
 	@property
 	def handle_function(self) -> "handle_auth_required_func_type":
@@ -308,12 +291,12 @@ class AuthRequiredSettings:
 				class_to_use_path=self.class_to_use_path,
 				listen_buffer_size=self.listen_buffer_size,
 				handle_function=self.handle_function,
-				callbacks=self.callbacks.to_dict(),
-				on_error=self.on_error,
+				actions_handler=self.actions_handler.to_dict(),
+				on_error_func=self.on_error_func,
 		)
 
 
-class _ContinueResponseHandlers(TypedDict):
+class _ContinueResponseParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'continueResponse' action.
 
@@ -330,22 +313,13 @@ class _ContinueResponseHandlers(TypedDict):
 	binary_response_headers: Optional[ParameterHandler]
 
 
-class _ContinueResponse(TypedDict):
-	"""
-	Internal TypedDict for the 'continueResponse' action configuration.
-
-	Attributes:
-		kwargs_func (build_kwargs_from_handlers_func_type): Function to build keyword arguments.
-		response_handle_func (response_handle_func_type): A function to process the response from the CDP command.
-		handlers (_ContinueResponseHandlers): Handlers for response parameters.
-	"""
-	
+class _ContinueResponseAction(TypedDict):
 	kwargs_func: "build_kwargs_from_handlers_func_type"
 	response_handle_func: "response_handle_func_type"
-	handlers: _ContinueResponseHandlers
+	parameters_handlers: _ContinueResponseParametersHandlers
 
 
-class _FulfillRequestHandlers(TypedDict):
+class _FulfillRequestParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'fulfillRequest' action.
 
@@ -364,22 +338,22 @@ class _FulfillRequestHandlers(TypedDict):
 	response_phrase: Optional[ParameterHandler]
 
 
-class _FulfillRequest(TypedDict):
+class _FulfillRequestAction(TypedDict):
 	"""
 	Internal TypedDict for the 'fulfillRequest' action configuration.
 
 	Attributes:
 		kwargs_func (build_kwargs_from_handlers_func_type): Function to build keyword arguments.
 		response_handle_func (response_handle_func_type): A function to process the response from the CDP command.
-		handlers (_FulfillRequestHandlers): Handlers for mock response parameters.
+		parameters_handlers (_FulfillRequestParametersHandlers): Handlers for mock response parameters.
 	"""
 	
 	kwargs_func: "build_kwargs_from_handlers_func_type"
 	response_handle_func: "response_handle_func_type"
-	handlers: _FulfillRequestHandlers
+	parameters_handlers: _FulfillRequestParametersHandlers
 
 
-class _FailRequestHandlers(TypedDict):
+class _FailRequestParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'failRequest' action.
 
@@ -390,22 +364,22 @@ class _FailRequestHandlers(TypedDict):
 	error_reason: ParameterHandler
 
 
-class _FailRequest(TypedDict):
+class _FailRequestAction(TypedDict):
 	"""
 	Internal TypedDict for the 'failRequest' action configuration.
 
 	Attributes:
 		kwargs_func (build_kwargs_from_handlers_func_type): Function to build keyword arguments.
 		response_handle_func (response_handle_func_type): A function to process the response from the CDP command.
-		handlers (_FailRequestHandlers): Handlers for the error reason.
+		parameters_handlers (_FailRequestParametersHandlers): Handlers for the error reason.
 	"""
 	
 	kwargs_func: "build_kwargs_from_handlers_func_type"
 	response_handle_func: "response_handle_func_type"
-	handlers: _FailRequestHandlers
+	parameters_handlers: _FailRequestParametersHandlers
 
 
-class _ContinueRequestHandlers(TypedDict):
+class _ContinueRequestParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'continueRequest' action.
 
@@ -424,57 +398,30 @@ class _ContinueRequestHandlers(TypedDict):
 	intercept_response: Optional[ParameterHandler]
 
 
-class _ContinueRequest(TypedDict):
-	"""
-	Internal TypedDict for the 'continueRequest' action configuration.
-
-	Attributes:
-		kwargs_func (build_kwargs_from_handlers_func_type): Function to build keyword arguments.
-		response_handle_func (response_handle_func_type): A function to process the response from the CDP command.
-		handlers (_ContinueRequestHandlers): Handlers for request parameters.
-	"""
-	
+class _ContinueRequestAction(TypedDict):
 	kwargs_func: "build_kwargs_from_handlers_func_type"
 	response_handle_func: "response_handle_func_type"
-	handlers: _ContinueRequestHandlers
+	parameters_handlers: _ContinueRequestParametersHandlers
 
 
-class _RequestPausedCallbacks(TypedDict):
-	"""
-	Internal TypedDict for callbacks of the 'RequestPaused' event.
+class _RequestPausedActions(TypedDict):
+	continue_request: Optional[_ContinueRequestAction]
+	fail_request: Optional[_FailRequestAction]
+	fulfill_request: Optional[_FulfillRequestAction]
+	continue_response: Optional[_ContinueResponseAction]
 
-	Attributes:
-		choose_func (request_paused_choose_func_type): Function to decide which action to take.
-		continue_request (Optional[_ContinueRequest]): Configuration for the 'continueRequest' action.
-		fail_request (Optional[_FailRequest]): Configuration for the 'failRequest' action.
-		fulfill_request (Optional[_FulfillRequest]): Configuration for the 'fulfillRequest' action.
-		continue_response (Optional[_ContinueResponse]): Configuration for the 'continueResponse' action.
-	"""
-	
-	choose_func: "request_paused_choose_func_type"
-	continue_request: Optional[_ContinueRequest]
-	fail_request: Optional[_FailRequest]
-	fulfill_request: Optional[_FulfillRequest]
-	continue_response: Optional[_ContinueResponse]
+
+class _RequestPausedActionsHandler(TypedDict):
+	choose_action_func: "request_paused_choose_action_func_type"
+	actions: _RequestPausedActions
 
 
 class _RequestPaused(TypedDict):
-	"""
-	Internal TypedDict representing the complete configuration for a 'RequestPaused' event listener.
-
-	Attributes:
-		class_to_use_path (str): Path to the CDP event class.
-		listen_buffer_size (int): Buffer size for the listener channel.
-		handle_function (handle_request_paused_func_type): The main handler function for the event.
-		callbacks (_RequestPausedCallbacks): Callbacks specific to this event.
-		on_error (Optional[on_error_type]): Function to call on error.
-	"""
-	
 	class_to_use_path: str
 	listen_buffer_size: int
 	handle_function: "handle_request_paused_func_type"
-	callbacks: _RequestPausedCallbacks
-	on_error: Optional["on_error_type"]
+	actions_handler: _RequestPausedActionsHandler
+	on_error_func: "on_error_func_type"
 
 
 async def _handle_request_paused(
@@ -496,20 +443,20 @@ async def _handle_request_paused(
 		event (Any): The 'fetch.RequestPaused' event object.
 	"""
 	
-	chosen_func_names = handler_settings["callbacks"]["choose_func"](self, event)
+	chosen_actions_func_names = handler_settings["actions_handler"]["choose_action_func"](self, event)
 	
-	for func_name in chosen_func_names:
-		chosen_func = handler_settings["callbacks"][func_name]
-		kwargs = await chosen_func["kwargs_func"](self, chosen_func["handlers"], event)
-		cache_func = chosen_func["response_handle_func"]
+	for action_func_name in chosen_actions_func_names:
+		chosen_action_func = handler_settings["actions_handler"]["actions"][action_func_name]
+		kwargs = await chosen_action_func["kwargs_func"](self, chosen_action_func["parameters_handlers"], event)
+		response_handle_func = chosen_action_func["response_handle_func"]
 	
 		try:
-			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{func_name}")(**kwargs))
+			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{action_func_name}")(**kwargs))
 	
-			if cache_func is not None:
-				self._nursery_object.start_soon(cache_func, self, response)
+			if response_handle_func is not None:
+				self._nursery_object.start_soon(response_handle_func, self, response)
 		except (Exception,) as error:
-			on_error = handler_settings["on_error"]
+			on_error = handler_settings["on_error_func"]
 	
 			if on_error is not None:
 				on_error(self, event, error)
@@ -532,10 +479,10 @@ class ContinueResponseHandlersSettings:
 	response_headers: Optional[ParameterHandler] = None
 	binary_response_headers: Optional[ParameterHandler] = None
 	
-	def to_dict(self) -> _ContinueResponseHandlers:
+	def to_dict(self) -> _ContinueResponseParametersHandlers:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _ContinueResponseHandlers(
+		return _ContinueResponseParametersHandlers(
 				response_code=self.response_code,
 				response_phrase=self.response_phrase,
 				response_headers=self.response_headers,
@@ -550,11 +497,11 @@ class ContinueResponseSettings:
 
 	Attributes:
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the CDP command. Defaults to None.
-		handlers (ContinueResponseHandlersSettings): Configuration for the response parameter handlers.
+		parameters_handlers (ContinueResponseHandlersSettings): Configuration for the response parameter handlers.
 	"""
 	
 	response_handle_func: "response_handle_func_type" = None
-	handlers: ContinueResponseHandlersSettings = ContinueResponseHandlersSettings()
+	parameters_handlers: ContinueResponseHandlersSettings = ContinueResponseHandlersSettings()
 	
 	@property
 	def kwargs_func(self) -> "build_kwargs_from_handlers_func_type":
@@ -562,13 +509,13 @@ class ContinueResponseSettings:
 		
 		return _build_kwargs_from_handlers_func
 	
-	def to_dict(self) -> _ContinueResponse:
+	def to_dict(self) -> _ContinueResponseAction:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _ContinueResponse(
+		return _ContinueResponseAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				handlers=self.handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict(),
 		)
 
 
@@ -591,10 +538,10 @@ class FulfillRequestHandlersSettings:
 	body: Optional[ParameterHandler] = None
 	response_phrase: Optional[ParameterHandler] = None
 	
-	def to_dict(self) -> _FulfillRequestHandlers:
+	def to_dict(self) -> _FulfillRequestParametersHandlers:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _FulfillRequestHandlers(
+		return _FulfillRequestParametersHandlers(
 				response_code=self.response_code,
 				response_headers=self.response_headers,
 				binary_response_headers=self.binary_response_headers,
@@ -609,11 +556,11 @@ class FulfillRequestSettings:
 	Settings for the 'fulfillRequest' action for a paused request.
 
 	Attributes:
-		handlers (FulfillRequestHandlersSettings): Configuration for the mock response parameter handlers.
+		parameters_handlers (FulfillRequestHandlersSettings): Configuration for the mock response parameter handlers.
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the CDP command. Defaults to None.
 	"""
 	
-	handlers: FulfillRequestHandlersSettings
+	parameters_handlers: FulfillRequestHandlersSettings
 	response_handle_func: "response_handle_func_type" = None
 	
 	@property
@@ -622,13 +569,13 @@ class FulfillRequestSettings:
 		
 		return _build_kwargs_from_handlers_func
 	
-	def to_dict(self) -> _FulfillRequest:
+	def to_dict(self) -> _FulfillRequestAction:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _FulfillRequest(
+		return _FulfillRequestAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				handlers=self.handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict(),
 		)
 
 
@@ -643,10 +590,10 @@ class FailRequestHandlersSettings:
 	
 	error_reason: ParameterHandler
 	
-	def to_dict(self) -> _FailRequestHandlers:
+	def to_dict(self) -> _FailRequestParametersHandlers:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _FailRequestHandlers(error_reason=self.error_reason)
+		return _FailRequestParametersHandlers(error_reason=self.error_reason)
 
 
 @dataclass
@@ -655,11 +602,11 @@ class FailRequestSettings:
 	Settings for the 'failRequest' action for a paused request.
 
 	Attributes:
-		handlers (FailRequestHandlersSettings): Configuration for the error reason handler.
+		parameters_handlers (FailRequestHandlersSettings): Configuration for the error reason handler.
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the CDP command. Defaults to None.
 	"""
 	
-	handlers: FailRequestHandlersSettings
+	parameters_handlers: FailRequestHandlersSettings
 	response_handle_func: "response_handle_func_type" = None
 	
 	@property
@@ -668,13 +615,13 @@ class FailRequestSettings:
 		
 		return _build_kwargs_from_handlers_func
 	
-	def to_dict(self) -> _FailRequest:
+	def to_dict(self) -> _FailRequestAction:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _FailRequest(
+		return _FailRequestAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				handlers=self.handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict(),
 		)
 
 
@@ -697,10 +644,10 @@ class ContinueRequestHandlersSettings:
 	headers: Optional[ParameterHandler] = None
 	intercept_response: Optional[ParameterHandler] = None
 	
-	def to_dict(self) -> _ContinueRequestHandlers:
+	def to_dict(self) -> _ContinueRequestParametersHandlers:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _ContinueRequestHandlers(
+		return _ContinueRequestParametersHandlers(
 				url=self.url,
 				method=self.method,
 				post_data=self.post_data,
@@ -716,11 +663,11 @@ class ContinueRequestSettings:
 
 	Attributes:
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the CDP command. Defaults to None.
-		handlers (ContinueRequestHandlersSettings): Configuration for the request parameter handlers.
+		parameters_handlers (ContinueRequestHandlersSettings): Configuration for the request parameter handlers.
 	"""
 	
 	response_handle_func: "response_handle_func_type" = None
-	handlers: ContinueRequestHandlersSettings = ContinueRequestHandlersSettings()
+	parameters_handlers: ContinueRequestHandlersSettings = ContinueRequestHandlersSettings()
 	
 	@property
 	def kwargs_func(self) -> "build_kwargs_from_handlers_func_type":
@@ -728,40 +675,27 @@ class ContinueRequestSettings:
 		
 		return _build_kwargs_from_handlers_func
 	
-	def to_dict(self) -> _ContinueRequest:
+	def to_dict(self) -> _ContinueRequestAction:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _ContinueRequest(
+		return _ContinueRequestAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				handlers=self.handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict(),
 		)
 
 
 @dataclass
-class RequestPausedCallbacksSettings:
-	"""
-	Configuration for callbacks that handle paused request events.
-
-	Attributes:
-		choose_func (request_paused_choose_func_type): A function that decides which action to take.
-		continue_request (Optional[ContinueRequestSettings]): Settings for the 'continueRequest' action.
-		fail_request (Optional[FailRequestSettings]): Settings for the 'failRequest' action.
-		fulfill_request (Optional[FulfillRequestSettings]): Settings for the 'fulfillRequest' action.
-		continue_response (Optional[ContinueResponseSettings]): Settings for the 'continueResponse' action.
-	"""
-	
-	choose_func: "request_paused_choose_func_type" = request_paused_choose_func
+class RequestPausedActionsSettings:
 	continue_request: Optional[ContinueRequestSettings] = None
 	fail_request: Optional[FailRequestSettings] = None
 	fulfill_request: Optional[FulfillRequestSettings] = None
 	continue_response: Optional[ContinueResponseSettings] = None
 	
-	def to_dict(self) -> _RequestPausedCallbacks:
+	def to_dict(self) -> _RequestPausedActions:
 		"""Converts the settings object to its dictionary representation."""
 		
-		return _RequestPausedCallbacks(
-				choose_func=self.choose_func,
+		return _RequestPausedActions(
 				continue_request=self.continue_request.to_dict()
 				if self.continue_request
 				else None,
@@ -778,19 +712,24 @@ class RequestPausedCallbacksSettings:
 
 
 @dataclass
-class RequestPausedSettings:
-	"""
-	Settings for handling the 'fetch.RequestPaused' event.
-
-	Attributes:
-		listen_buffer_size (int): The buffer size for the event listener channel.
-		callbacks (RequestPausedCallbacksSettings): Configuration for the event's callbacks.
-		on_error (Optional[on_error_type]): An optional function to call on error.
-	"""
+class RequestPausedActionsHandlerSettings:
+	choose_action_func: "request_paused_choose_action_func_type" = request_paused_choose_func
+	actions: RequestPausedActionsSettings = RequestPausedActionsSettings()
 	
+	def to_dict(self) -> _RequestPausedActionsHandler:
+		"""Converts the settings object to its dictionary representation."""
+		
+		return _RequestPausedActionsHandler(
+				choose_action_func=self.choose_action_func,
+				actions=self.actions.to_dict(),
+		)
+
+
+@dataclass
+class RequestPausedSettings:
 	listen_buffer_size: int = 50
-	callbacks: RequestPausedCallbacksSettings = RequestPausedCallbacksSettings()
-	on_error: Optional["on_error_type"] = None
+	actions_handler: RequestPausedActionsHandlerSettings = RequestPausedActionsHandlerSettings()
+	on_error_func: "on_error_func_type" = None
 	
 	@property
 	def handle_function(self) -> "handle_request_paused_func_type":
@@ -811,8 +750,8 @@ class RequestPausedSettings:
 				class_to_use_path=self.class_to_use_path,
 				listen_buffer_size=self.listen_buffer_size,
 				handle_function=self.handle_function,
-				callbacks=self.callbacks.to_dict(),
-				on_error=self.on_error,
+				actions_handler=self.actions_handler.to_dict(),
+				on_error_func=self.on_error_func,
 		)
 
 
@@ -949,9 +888,10 @@ class FetchSettings:
 		)
 
 
-build_kwargs_from_handlers_func_type = Callable[
-	["DevTools", dict[str, Optional[ParameterHandler]], Any],
-	Awaitable[dict[str, Any]]
+kwargs_type = dict[str, Any]
+kwargs_output_type = Awaitable[kwargs_type]
+build_kwargs_from_handlers_func_type = Optional[
+	Callable[["DevTools", dict[str, Optional[ParameterHandler]], Any], kwargs_output_type]
 ]
 request_paused_actions_literal = Literal[
 	"continue_request",
@@ -960,11 +900,10 @@ request_paused_actions_literal = Literal[
 	"continue_response"
 ]
 auth_required_actions_literal = Literal["continue_with_auth"]
-request_paused_choose_func_type = Callable[["DevTools", Any], list[request_paused_actions_literal]]
-auth_required_choose_func_type = Callable[["DevTools", Any], list[auth_required_actions_literal]]
+request_paused_choose_action_func_type = Callable[["DevTools", Any], list[request_paused_actions_literal]]
+auth_required_choose_action_func_type = Callable[["DevTools", Any], list[auth_required_actions_literal]]
 handle_request_paused_func_type = Callable[["DevTools", CdpSession, _RequestPaused, Any], Awaitable[None]]
 handle_auth_required_func_type = Callable[["DevTools", CdpSession, _AuthRequired, Any], Awaitable[None]]
 parameter_handler_type = Callable[["DevTools", trio.Event, Any, Any, dict[str, Any]], Awaitable[None]]
-kwargs_output_type = Awaitable[dict[str, Any]]
 response_handle_func_type = Optional[Callable[["DevTools", Any], Awaitable[Any]]]
-on_error_type = Callable[["DevTools", Any, Exception], None]
+on_error_func_type = Optional[Callable[["DevTools", Any, Exception], None]]

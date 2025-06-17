@@ -24,12 +24,12 @@ class AbstractEvent(TypedDict):
 		class_to_use_path (str): The dot-separated path to the CDP event class (e.g., "fetch.RequestPaused").
 		listen_buffer_size (int): The buffer size for the event listener channel.
 		handle_function (Callable): The asynchronous function to execute when an event is received.
-		callbacks (TypedDict): A dictionary of callback functions and settings specific to the event handler.
-		on_error (Optional[Callable]): An optional function to call if an error occurs during event handling.
+		actions_handler (TypedDict): A dictionary of callback functions and settings specific to the event handler.
+		on_error_func (Optional[Callable]): An optional function to call if an error occurs during event handling.
 	"""
 	
 	class_to_use_path: str
 	listen_buffer_size: int
 	handle_function: Callable[["DevTools", CdpSession, Any, Any], Awaitable[None]]
-	callbacks: TypedDict
-	on_error: Optional[Callable[["DevTools", Any, Exception], None]]
+	actions_handler: dict
+	on_error_func: Optional[Callable[["DevTools", Any, Exception], None]]
