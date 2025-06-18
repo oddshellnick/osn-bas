@@ -38,7 +38,7 @@ def text_input_to_parts(text: str) -> list[TextInputPart]:
 		text (str): The input string to be broken down.
 
 	Returns:
-		List[TextInputPart]: A list of `TextInputPart` objects representing the sequence
+		list[TextInputPart]: A list of `TextInputPart` objects representing the sequence
 							 of text segments and their associated durations for simulated typing.
 	"""
 	
@@ -69,7 +69,7 @@ def scroll_to_parts(start_position: ActionPoint, end_position: ActionPoint) -> l
 		end_position (ActionPoint): The target conceptual scroll position.
 
 	Returns:
-		List[ScrollPart]: A list of `ScrollPart` objects representing the sequence of scroll
+		list[ScrollPart]: A list of `ScrollPart` objects representing the sequence of scroll
 						  movements and their associated durations. The `delta` in each part
 						  represents the scroll amount for that step, and the `point` represents
 						  the conceptual position *after* applying that delta.
@@ -173,7 +173,7 @@ def move_to_parts(start_position: ActionPoint, end_position: ActionPoint) -> lis
 		end_position (ActionPoint): The target coordinates for the movement.
 
 	Returns:
-		List[MovePart]: A list of `MovePart` objects representing the sequence of mouse
+		list[MovePart]: A list of `MovePart` objects representing the sequence of mouse
 						movements and their associated durations. Each `MovePart` indicates
 						the `point` to move to, the `offset` from the previous point,
 						and the `duration` for that movement segment.

@@ -51,22 +51,25 @@ class DevTools:
 	by using an asynchronous context manager.
 
 	Attributes:
-		_webdriver (BrowserWebDriver): The parent WebDriver instance associated with this DevTools instance.
+		_webdriver ("BrowserWebDriver"): The parent WebDriver instance associated with this DevTools instance.
 		_bidi_connection (Optional[AbstractAsyncContextManager[BidiConnection, Any]]): Asynchronous context manager for the BiDi connection.
 		_bidi_connection_object (Optional[BidiConnection]): The BiDi connection object when active.
-		_bidi_devtools (Optional[Any]): The DevTools API object from the BiDi connection.
 		_is_active (bool): Flag indicating if the DevTools event handler is currently active.
 		_nursery (Optional[AbstractAsyncContextManager[trio.Nursery, Optional[bool]]]): Asynchronous context manager for the Trio nursery.
 		_nursery_object (Optional[trio.Nursery]): The Trio nursery object when active, managing concurrent tasks.
 		_domains_settings (Domains): Settings for configuring DevTools domain handlers.
+		_handling_targets (list[str]): list of target IDs currently being handled by event listeners.
 		cache (dict[Any, Any]): A dictionary for caching data across DevTools event handlers.
+		main_lock (trio.Lock): A lock used for synchronizing access to shared resources, like the list of handled targets.
 		exit_event (Optional[trio.Event]): Trio Event to signal exiting of DevTools event handling.
 
 	EXAMPLES
 	________
 	async with driver.dev_tools as driver_wrapper:
 		# DevTools event handling is active within this block.
+
 		# Configure domain handlers here.
+
 		await driver_wrapper.get("https://example.com")
 	# DevTools event handling is deactivated after exiting the block.
 	"""
@@ -82,7 +85,6 @@ class DevTools:
 		self._webdriver = parent_webdriver
 		self._bidi_connection: Optional[AbstractAsyncContextManager[BidiConnection, Any]] = None
 		self._bidi_connection_object: Optional[BidiConnection] = None
-		self._bidi_devtools: Optional[Any] = None
 		self._is_active = False
 		self._nursery: Optional[AbstractAsyncContextManager[trio.Nursery, Optional[bool]]] = None
 		self._nursery_object: Optional[trio.Nursery] = None
@@ -92,7 +94,18 @@ class DevTools:
 		self.main_lock = trio.Lock()
 		self.exit_event: Optional[trio.Event] = None
 	
-	async def _setup_target(self, cdp_session: CdpSession, target_setup: trio.Event):
+	async def _setup_target(self, cdp_session: CdpSession, target_setup_event: trio.Event):
+		"""
+		Sets up event listeners and necessary configurations for a specific CDP target session.
+
+		This involves enabling target discovery and auto-attachment, starting the new target listener,
+		enabling configured domains, and starting event handlers for each domain.
+
+		Args:
+			cdp_session (CdpSession): The CDP session for the target being set up.
+			target_setup_event (trio.Event): An event to signal when the target setup is complete.
+		"""
+		
 		try:
 			await cdp_session.execute(self.get_devtools_object("target.set_discover_targets")(True))
 			await cdp_session.execute(
@@ -133,17 +146,21 @@ class DevTools:
 		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 		finally:
-			target_setup.set()
+			target_setup_event.set()
 	
-	async def _run_new_targets_listener(self, cdp_session: CdpSession, ready_event: trio.Event):
+	async def _run_new_targets_listener(
+			self,
+			cdp_session: CdpSession,
+			new_targets_listener_ready_event: trio.Event
+	):
 		"""
 		Processes new browser targets as they are created.
 
 		Listens for 'target.TargetCreated' events, which are emitted when new targets (like tabs or windows) are created in the browser.
-		For each new target of type 'page', it starts a new nursery task to handle events for that target.
 
 		Args:
 			cdp_session (CdpSession): The CDP session object to listen for target creation events.
+			new_targets_listener_ready_event (trio.Event): An event to signal when the listener is ready.
 		"""
 		
 		await cdp_session.execute(self.get_devtools_object("target.set_discover_targets")(True))
@@ -154,11 +171,12 @@ class DevTools:
 				self.get_devtools_object("target.TargetInfoChanged"),
 				buffer_size=500
 		)
-		ready_event.set()
+		new_targets_listener_ready_event.set()
 		
 		while True:
 			try:
 				event = await receiver_channel.receive()
+				print(event)
 				self._nursery_object.start_soon(self._handle_new_target, event)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
@@ -170,28 +188,59 @@ class DevTools:
 		
 				logging.log(logging.ERROR, error)
 	
-	async def _handle_new_target(self, event: Any):
-		target_id = event.target_info.target_id
+	async def _handle_new_target(self, target_event: Any):
+		"""
+		Handles a single new target event.
+
+		If the target is of type 'page' and not already being handled, it opens a new CDP session for it
+		and sets up event listeners for that session within a new nursery task.
+
+		Args:
+			target_event (Any): The target event object (e.g., TargetCreated) from which the target ID is extracted.
+		"""
 		
 		try:
-			if await self._add_target_id(target_id):
-				async with self._new_session_manager(target_id) as new_session:
+			if await self._add_target_id(target_event):
+				async with self._new_session_manager(target_event) as new_session:
 					listeners_started_event = trio.Event()
 					await self._setup_target(new_session, listeners_started_event)
 					await listeners_started_event.wait()
 		
 					await self.exit_event.wait()
 		
-				await self._remove_target_id(target_id)
+				await self._remove_target_id(target_event)
 		except (trio.Cancelled, trio.EndOfChannel):
 			pass
+		except (Exception,):
+			exception_type, exception_value, exception_traceback = sys.exc_info()
+			error = "".join(
+					traceback.format_exception(exception_type, exception_value, exception_traceback)
+			)
+		
+			logging.log(logging.ERROR, error)
 	
 	@property
-	def main_cdp_session(self):
+	def main_cdp_session(self) -> CdpSession:
+		"""
+		Retrieves the main CDP session object associated with the WebDriver.
+
+		Returns:
+			CdpSession: The main CDP session object.
+		"""
+		
 		return self._bidi_connection_object.session
 	
 	@property
-	def devtools_module(self):
+	def devtools_module(self) -> Any:
+		"""
+		Retrieves the DevTools API root object from the BiDi connection.
+
+		This object provides access to all CDP domains and their methods.
+
+		Returns:
+			Any: The root DevTools API object.
+		"""
+		
 		return self._bidi_connection_object.devtools
 	
 	def get_devtools_object(self, path: str) -> Any:
@@ -199,7 +248,7 @@ class DevTools:
 		Navigates and retrieves a specific object within the DevTools API structure.
 
 		Using a dot-separated path, this method traverses the nested DevTools API objects to retrieve a target object.
-		For example, a path like "fetch.enable" would access `self._bidi_devtools.fetch.enable`.
+		For example, a path like "fetch.enable" would access `self.devtools_module.fetch.enable`.
 
 		Args:
 			path (str): A dot-separated string representing the path to the desired DevTools API object.
@@ -230,7 +279,8 @@ class DevTools:
 
 		Args:
 			cdp_session (CdpSession): The CDP session to listen on.
-			event_config (AbstractDomainClass): The configuration for the event listener.
+			domain_handler_ready_event (trio.Event): An event to signal when this specific event handler is ready.
+			event_config (AbstractEvent): The configuration for the event listener.
 		"""
 		
 		try:
@@ -272,6 +322,18 @@ class DevTools:
 			events_ready_event: trio.Event,
 			domain_config
 	) -> None:
+		"""
+		Starts all configured event handlers for a specific DevTools domain within a CDP session.
+
+		For each event handler defined in the domain configuration, it starts a new task
+		in the nursery using `_run_event_handler`.
+
+		Args:
+			cdp_session (CdpSession): The CDP session to run event handlers on.
+			events_ready_event (trio.Event): An event to signal when all handlers for this domain are ready.
+			domain_config (dict[str, Any]): The configuration dictionary for the domain, including its event handlers.
+		"""
+		
 		events_handlers_ready_events: list[trio.Event] = []
 		
 		for event_name, event_config in domain_config.get("handlers", {}).items():
@@ -291,7 +353,21 @@ class DevTools:
 		
 		events_ready_event.set()
 	
-	async def _remove_target_id(self, target_id: str):
+	async def _remove_target_id(self, target_event: Any) -> bool:
+		"""
+		Atomically removes a target ID from the list of currently handled targets.
+
+		The target ID is extracted from the provided target event object.
+
+		Args:
+			target_event (Any): The target event object (e.g., TargetCreated, TargetDestroyed) containing the target ID.
+
+		Returns:
+			bool: True if the target ID was found and removed, False otherwise.
+		"""
+		
+		target_id = target_event.target_info.target_id
+		
 		async with self.main_lock:
 			try:
 				self._handling_targets.remove(target_id)
@@ -322,25 +398,42 @@ class DevTools:
 		return driver._get_cdp_details()[1]
 	
 	@asynccontextmanager
-	async def _new_session_manager(self, target_id: str) -> AsyncGenerator[CdpSession, None]:
+	async def _new_session_manager(self, target_event: Any) -> AsyncGenerator[CdpSession, None]:
 		"""
 		Manages a new CDP session for a specific target, using async context management.
 
-		This context manager opens a new CDP session for a given target ID and ensures that the session is properly closed after use.
+		This context manager opens a new CDP session for the target ID extracted from the
+		provided event object and ensures that the session is properly closed after use.
 		It's used to handle the lifecycle of CDP sessions for different browser targets.
 
 		Args:
-			target_id (str): The ID of the browser target for which to open a new CDP session.
+			target_event (Any): The target event object (e.g., TargetCreated) containing the target ID for the new session.
 
 		Returns:
 			AsyncGenerator[CdpSession, None]: An asynchronous generator that yields a CdpSession object, allowing for operations within the session context.
 		"""
 		
+		target_id = target_event.target_info.target_id
+		
 		async with open_cdp(self._websocket_url) as new_connection:
 			async with new_connection.open_session(target_id) as new_session:
 				yield new_session
 	
-	async def _add_target_id(self, target_id: str):
+	async def _add_target_id(self, target_event: Any) -> bool:
+		"""
+		Atomically adds a target ID to the list of currently handled targets if it's not already present.
+
+		The target ID is extracted from the provided target event object.
+
+		Args:
+			target_event (Any): The target event object (e.g., TargetCreated) containing the target ID to add.
+
+		Returns:
+			bool: True if the target ID was added (i.e., it was not already present), False otherwise.
+		"""
+		
+		target_id = target_event.target_info.target_id
+		
 		async with self.main_lock:
 			if target_id not in self._handling_targets:
 				self._handling_targets.append(target_id)
@@ -354,7 +447,7 @@ class DevTools:
 
 		This method is called when entering an `async with` block with a DevTools instance.
 		It initializes the BiDi connection, starts a Trio nursery to manage event listeners,
-		and then starts listening for DevTools events.
+		and then starts listening for DevTools events on the main target.
 
 		Returns:
 			TrioWebDriverWrapperProtocol: Returns a wrapped WebDriver object that can be used to interact with the browser
@@ -362,14 +455,6 @@ class DevTools:
 
 		Raises:
 			CantEnterDevToolsContextError: If the WebDriver driver is not initialized, indicating that a browser session has not been started yet.
-
-		EXAMPLES
-		________
-		async with driver.dev_tools as driver_wrapper:
-			# DevTools event handling is active within this block
-			await driver.dev_tools.set_domains_handlers(...)
-			await driver_wrapper.get("https://example.com")
-		# DevTools event handling is deactivated after exiting the block
 		"""
 		
 		if self._webdriver.driver is None:
@@ -402,7 +487,8 @@ class DevTools:
 
 		This method is called when exiting an `async with` block with a DevTools instance.
 		It ensures that all event listeners are cancelled, the Trio nursery is closed,
-		and the BiDi connection is properly shut down.
+		and the BiDi connection is properly shut down. Cleanup attempts are made even if
+		an exception occurred within the `async with` block.
 
 		Args:
 			exc_type (Optional[type[BaseException]]): The exception type, if any, that caused the context to be exited.
@@ -444,12 +530,6 @@ class DevTools:
 				self.exit_event.set()
 				self.exit_event = None
 		
-		exception_type, exception_value, exception_traceback = sys.exc_info()
-		error = "".join(
-				traceback.format_exception(exception_type, exception_value, exception_traceback)
-		)
-		print(error)
-		
 		if self._is_active:
 			_activate_exit_event()
 			_close_nursery_object()
@@ -474,6 +554,9 @@ class DevTools:
 		"""
 		Removes the settings for a specific domain.
 
+		This is an internal method intended to be used only when the DevTools context is not active.
+		It uses the `@warn_if_active` decorator to log a warning if called incorrectly.
+
 		Args:
 			domain (domains_type): The name of the domain to remove settings for.
 		"""
@@ -485,6 +568,7 @@ class DevTools:
 		Removes handler settings for one or more DevTools domains.
 
 		This method can be called with a single domain name or a sequence of domain names.
+		It should only be called when the DevTools context is not active.
 
 		Args:
 			domains (Union[domains_type, Sequence[domains_type]]): A single domain name as a string,
@@ -503,9 +587,12 @@ class DevTools:
 			raise TypeError(f"domains must be a str or a sequence of str, got {type(domains)}.")
 	
 	@warn_if_active
-	def _set_handler_settings(self, domain: domains_type, settings: domains_classes_type,):
+	def _set_handler_settings(self, domain: domains_type, settings: domains_classes_type):
 		"""
 		Sets the handler settings for a specific domain.
+
+		This is an internal method intended to be used only when the DevTools context is not active.
+		It uses the `@warn_if_active` decorator to log a warning if called incorrectly.
 
 		Args:
 			domain (domains_type): The name of the domain to configure.
@@ -519,6 +606,7 @@ class DevTools:
 		Sets handler settings for multiple domains from a DomainsSettings object.
 
 		This method iterates through the provided settings and applies them to the corresponding domains.
+		It should only be called when the DevTools context is not active.
 
 		Args:
 			settings (DomainsSettings): An object containing the configuration for one or more domains.

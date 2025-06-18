@@ -161,7 +161,7 @@ class TrioWebDriverWrapperProtocol(Protocol):
 			duration (int): Base duration (in milliseconds) used when creating a new ActionChains
 							instance if `parent_action` is None. Total move time depends on the
 							`move_to_parts` calculation within `build_hm_move_action`. Defaults to 250.
-			devices (Optional[List[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
+			devices (Optional[list[Union[PointerInput, KeyInput, WheelInput]]]): Specific input devices
 																				 to use if creating a new ActionChains
 																				 instance. Defaults to None.
 
