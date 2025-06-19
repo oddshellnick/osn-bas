@@ -13,7 +13,7 @@ class _MoveStep:
 		index (int): An index identifying this step's position in a sequence.
 	"""
 	
-	def __init__(self, amplitude_x: int, amplitude_y: int, index: int) -> None:
+	def __init__(self, amplitude_x: int, amplitude_y: int, index: int):
 		"""
 		Initializes a _MoveStep instance.
 
@@ -51,7 +51,7 @@ class TextInputPart:
 					   associated with this part, often representing a pause before or after typing it.
 	"""
 	
-	def __init__(self, text: str, duration: int) -> None:
+	def __init__(self, text: str, duration: int):
 		"""
 		Initializes a TextInputPart instance.
 
@@ -85,7 +85,7 @@ class ScrollDelta:
 		y (int): The vertical scroll amount. Positive scrolls down, negative up.
 	"""
 	
-	def __init__(self, x: int, y: int) -> None:
+	def __init__(self, x: int, y: int):
 		"""
 		Initializes a ScrollDelta instance.
 
@@ -120,7 +120,7 @@ class ActionPoint:
 		y (int): The vertical coordinate.
 	"""
 	
-	def __init__(self, x: int, y: int) -> None:
+	def __init__(self, x: int, y: int):
 		"""
 		Initializes an ActionPoint instance.
 
@@ -182,7 +182,7 @@ class ScrollPart:
 		duration (int): The duration (milliseconds) for this scroll segment.
 	"""
 	
-	def __init__(self, point: ActionPoint, delta: ScrollDelta, duration: int) -> None:
+	def __init__(self, point: ActionPoint, delta: ScrollDelta, duration: int):
 		"""
 		Initializes a ScrollPart instance.
 
@@ -218,7 +218,7 @@ class MoveOffset:
 		y (int): The vertical offset component.
 	"""
 	
-	def __init__(self, x: int, y: int) -> None:
+	def __init__(self, x: int, y: int):
 		"""
 		Initializes a MoveOffset instance.
 
@@ -254,7 +254,7 @@ class MovePart:
 		duration (int): The duration (milliseconds) for this movement segment.
 	"""
 	
-	def __init__(self, point: ActionPoint, offset: MoveOffset, duration: int) -> None:
+	def __init__(self, point: ActionPoint, offset: MoveOffset, duration: int):
 		"""
 		Initializes a MovePart instance.
 

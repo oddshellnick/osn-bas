@@ -1,7 +1,5 @@
-import sys
 import trio
-import logging
-import traceback
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import log_error
 from typing import (
 	Any,
 	Literal,
@@ -35,7 +33,7 @@ def request_paused_choose_func(self: "DevTools", event: Any) -> list["request_pa
 	return ["continue_request"]
 
 
-def on_error_func(self: "DevTools", event: Any, error: Exception) -> None:
+def on_error_func(self: "DevTools", event: Any, error: Exception):
 	"""
 	Default error handler for DevTools events.
 
@@ -48,12 +46,7 @@ def on_error_func(self: "DevTools", event: Any, error: Exception) -> None:
 		error (Exception): The exception that was raised.
 	"""
 	
-	exception_type, exception_value, exception_traceback = sys.exc_info()
-	error = "".join(
-			traceback.format_exception(exception_type, exception_value, exception_traceback)
-	)
-	
-	logging.log(logging.ERROR, error)
+	log_error()
 
 
 class HeaderInstance(TypedDict):

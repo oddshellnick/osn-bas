@@ -1,7 +1,4 @@
-import sys
 import trio
-import logging
-import traceback
 from types import TracebackType
 from collections.abc import Sequence
 from selenium.webdriver.common.bidi.cdp import CdpSession, open_cdp
@@ -22,12 +19,14 @@ from typing import (
 	Union,
 	cast
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
-	log_on_error,
-	warn_if_active
-)
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	CantEnterDevToolsContextError
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+	execute_cdp_command,
+	log_error,
+	log_on_error,
+	warn_if_active
 )
 from osn_bas.webdrivers.BaseDriver.dev_tools.domains import (
 	Domains,
@@ -107,9 +106,19 @@ class DevTools:
 		"""
 		
 		try:
-			await cdp_session.execute(self.get_devtools_object("target.set_discover_targets")(True))
-			await cdp_session.execute(
-					self.get_devtools_object("target.set_auto_attach")(auto_attach=True, wait_for_debugger_on_start=True, flatten=True,)
+			await execute_cdp_command(
+					"log",
+					cdp_session,
+					self.get_devtools_object("target.set_discover_targets"),
+					True
+			)
+			await execute_cdp_command(
+					"log",
+					cdp_session,
+					self.get_devtools_object("target.set_auto_attach"),
+					auto_attach=True,
+					wait_for_debugger_on_start=True,
+					flatten=True
 			)
 		
 			target_ready_events: list[trio.Event] = []
@@ -126,8 +135,11 @@ class DevTools:
 			for domain_name, domain_config in self._domains_settings.items():
 				if domain_config.get("enable_func_path", None) is not None:
 					enable_func_kwargs = domain_config.get("enable_func_kwargs", {})
-					await cdp_session.execute(
-							self.get_devtools_object(domain_config["enable_func_path"])(**enable_func_kwargs)
+					await execute_cdp_command(
+							"log",
+							cdp_session,
+							self.get_devtools_object(domain_config["enable_func_path"]),
+							**enable_func_kwargs
 					)
 		
 				domain_handlers_ready_event = trio.Event()
@@ -142,7 +154,11 @@ class DevTools:
 			for domain_handlers_ready_event in target_ready_events:
 				await domain_handlers_ready_event.wait()
 		
-			await cdp_session.execute(self.get_devtools_object("runtime.run_if_waiting_for_debugger")())
+			await execute_cdp_command(
+					"log",
+					cdp_session,
+					self.get_devtools_object("runtime.run_if_waiting_for_debugger")
+			)
 		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 		finally:
@@ -163,7 +179,12 @@ class DevTools:
 			new_targets_listener_ready_event (trio.Event): An event to signal when the listener is ready.
 		"""
 		
-		await cdp_session.execute(self.get_devtools_object("target.set_discover_targets")(True))
+		await execute_cdp_command(
+				"log",
+				cdp_session,
+				self.get_devtools_object("target.set_discover_targets"),
+				True
+		)
 		
 		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(
 				self.get_devtools_object("target.TargetCreated"),
@@ -176,17 +197,11 @@ class DevTools:
 		while True:
 			try:
 				event = await receiver_channel.receive()
-				print(event)
 				self._nursery_object.start_soon(self._handle_new_target, event)
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):
-				exception_type, exception_value, exception_traceback = sys.exc_info()
-				error = "".join(
-						traceback.format_exception(exception_type, exception_value, exception_traceback)
-				)
-		
-				logging.log(logging.ERROR, error)
+				log_error()
 	
 	async def _handle_new_target(self, target_event: Any):
 		"""
@@ -212,12 +227,7 @@ class DevTools:
 		except (trio.Cancelled, trio.EndOfChannel):
 			pass
 		except (Exception,):
-			exception_type, exception_value, exception_traceback = sys.exc_info()
-			error = "".join(
-					traceback.format_exception(exception_type, exception_value, exception_traceback)
-			)
-		
-			logging.log(logging.ERROR, error)
+			log_error()
 	
 	@property
 	def main_cdp_session(self) -> CdpSession:
@@ -289,12 +299,7 @@ class DevTools:
 					buffer_size=event_config["listen_buffer_size"]
 			)
 		except (Exception,):
-			exception_type, exception_value, exception_traceback = sys.exc_info()
-			error = "".join(
-					traceback.format_exception(exception_type, exception_value, exception_traceback)
-			)
-		
-			logging.log(logging.ERROR, error)
+			log_error()
 		
 			return
 		finally:
@@ -309,19 +314,14 @@ class DevTools:
 			except (trio.Cancelled, trio.EndOfChannel):
 				break
 			except (Exception,):
-				exception_type, exception_value, exception_traceback = sys.exc_info()
-				error = "".join(
-						traceback.format_exception(exception_type, exception_value, exception_traceback)
-				)
-		
-				logging.log(logging.ERROR, error)
+				log_error()
 	
 	async def _run_events_handlers(
 			self,
 			cdp_session: CdpSession,
 			events_ready_event: trio.Event,
 			domain_config
-	) -> None:
+	):
 		"""
 		Starts all configured event handlers for a specific DevTools domain within a CDP session.
 

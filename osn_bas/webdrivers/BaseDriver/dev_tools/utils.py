@@ -3,15 +3,12 @@ import logging
 import warnings
 import traceback
 import functools
+from selenium.webdriver.common.bidi.cdp import CdpSession
 from typing import (
 	Any,
 	Callable,
 	Literal,
 	TYPE_CHECKING
-)
-from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
-	WrongHandlerSettingsError,
-	WrongHandlerSettingsTypeError
 )
 
 
@@ -60,19 +57,48 @@ def log_on_error(func: Callable) -> Callable:
 	Returns:
 		Callable: The wrapped function. Returns the result of the decorated function if execution is successful, otherwise returns None if an exception occurs.
 	"""
-	
+
 	@functools.wraps(func)
 	def wrapper(*args, **kwargs):
 		try:
 			return func(*args, **kwargs)
 		except (Exception,):
-			exception_type, exception_value, exception_traceback = sys.exc_info()
-			error = "".join(
-					traceback.format_exception(exception_type, exception_value, exception_traceback)
-			)
-		
-			logging.log(logging.ERROR, error)
-		
+			log_error()
 			return None
 	
 	return wrapper
+
+
+class ExceptionThrown:
+	def __init__(self, exception: Exception):
+		self.exception = exception
+
+
+def log_error():
+	exception_type, exception_value, exception_traceback = sys.exc_info()
+	error = "".join(
+			traceback.format_exception(exception_type, exception_value, exception_traceback)
+	)
+	
+	logging.log(logging.ERROR, error)
+
+
+async def execute_cdp_command(
+		error_mode: Literal["raise", "log", "pass"],
+		cdp_session: CdpSession,
+		function: Callable,
+		*args,
+		**kwargs
+) -> Any:
+	try:
+		return await cdp_session.execute(function(*args, **kwargs))
+	except Exception as error:
+		if error_mode == "raise":
+			raise error
+		elif error_mode == "log":
+			log_error()
+			return ExceptionThrown(error)
+		elif error_mode == "pass":
+			return ExceptionThrown(error)
+	
+		raise ValueError(f"Wrong error_mode: {error_mode}. Expected: 'raise', 'log', 'pass'.")

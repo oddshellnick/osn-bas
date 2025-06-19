@@ -1,11 +1,13 @@
 import trio
 from dataclasses import dataclass
 from selenium.webdriver.common.bidi.cdp import CdpSession
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import execute_cdp_command
 from typing import (
 	Any,
 	Awaitable,
 	Callable,
 	Literal,
+	Mapping,
 	Optional,
 	TYPE_CHECKING,
 	TypedDict
@@ -14,7 +16,19 @@ from osn_bas.webdrivers.BaseDriver.dev_tools.domains_default.fetch import (
 	auth_required_choose_func,
 	request_paused_choose_func
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.domains.utils import (
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains.abstract import (
+	AbstractAction,
+	AbstractActionParametersHandlersSettings,
+	AbstractActionSettings,
+	AbstractDomain,
+	AbstractDomainEnableKwargsSettings,
+	AbstractDomainHandlersSettings,
+	AbstractDomainSettings,
+	AbstractEvent,
+	AbstractEventActionsHandler,
+	AbstractEventActionsHandlerSettings,
+	AbstractEventActionsSettings,
+	AbstractEventSettings,
 	ParameterHandler,
 	build_kwargs_from_handlers_func_type,
 	kwargs_type,
@@ -56,7 +70,7 @@ class _ContinueWithAuthParametersHandlers(TypedDict):
 
 
 @dataclass
-class ContinueWithAuthParameterHandlersSettings:
+class ContinueWithAuthParameterHandlersSettings(AbstractActionParametersHandlersSettings):
 	"""
 	Settings for the handlers that provide authentication credentials when required.
 
@@ -82,7 +96,7 @@ class ContinueWithAuthParameterHandlersSettings:
 
 async def _build_kwargs_from_handlers_func(
 		self: "DevTools",
-		handlers: dict[str, Optional[ParameterHandler]],
+		handlers: Mapping[str, Optional[ParameterHandler]],
 		event: Any
 ) -> kwargs_type:
 	"""
@@ -94,7 +108,7 @@ async def _build_kwargs_from_handlers_func(
 
 	Args:
 		self ("DevTools"): The DevTools instance managing the handlers and nursery.
-		handlers (dict[str, Optional[ParameterHandler]]): A dictionary where keys are the parameter names (e.g., "url", "method") and values are `ParameterHandler` objects or None.
+		handlers (Mapping[str, Optional[ParameterHandler]]): A dictionary where keys are the parameter names (e.g., "url", "method") and values are `ParameterHandler` objects or None.
 		event (Any): The CDP event object that triggered the execution (e.g., Fetch.RequestPaused, Fetch.AuthRequired).
 
 	Returns:
@@ -141,16 +155,16 @@ class _ContinueWithAuth(TypedDict):
 
 
 @dataclass
-class ContinueWithAuthSettings:
+class ContinueWithAuthSettings(AbstractActionSettings):
 	"""
 	Settings for continuing a request that requires authentication using the `fetch.continueWithAuth` CDP command.
 
 	Attributes:
-		auth_challenge_response (ContinueWithAuthParameterHandlersSettings): Settings for the handlers that provide authentication credentials.
+		parameters_handlers (ContinueWithAuthParameterHandlersSettings): Settings for the handlers that provide authentication credentials.
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the `fetch.continueWithAuth` CDP command. Defaults to None.
 	"""
 	
-	auth_challenge_response: ContinueWithAuthParameterHandlersSettings
+	parameters_handlers: ContinueWithAuthParameterHandlersSettings
 	response_handle_func: response_handle_func_type = None
 	
 	@property
@@ -175,7 +189,7 @@ class ContinueWithAuthSettings:
 		return _ContinueWithAuth(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				parameters_handlers=self.auth_challenge_response.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict(),
 		)
 
 
@@ -191,7 +205,7 @@ class _AuthRequiredActions(TypedDict, total=False):
 
 
 @dataclass
-class AuthRequiredActionsSettings:
+class AuthRequiredActionsSettings(AbstractEventActionsSettings):
 	"""
 	Container for configurations of possible actions to take when authentication is required.
 
@@ -216,7 +230,7 @@ class AuthRequiredActionsSettings:
 		)
 
 
-class _AuthRequiredActionsHandler(TypedDict):
+class _AuthRequiredActionsHandler(AbstractEventActionsHandler):
 	"""
 	Internal TypedDict for the actions handler configuration for the 'AuthRequired' event.
 
@@ -230,7 +244,7 @@ class _AuthRequiredActionsHandler(TypedDict):
 
 
 @dataclass
-class AuthRequiredActionsHandlerSettings:
+class AuthRequiredActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 	"""
 	Settings for handling the 'fetch.AuthRequired' event by choosing and executing specific actions.
 
@@ -267,7 +281,7 @@ class AuthRequiredActionsHandlerSettings:
 		)
 
 
-class _AuthRequired(TypedDict):
+class _AuthRequired(AbstractEvent):
 	"""
 	Internal TypedDict representing the complete configuration for an 'AuthRequired' event listener.
 
@@ -316,7 +330,12 @@ async def _handle_auth_required(
 		response_handle_func = chosen_func["response_handle_func"]
 	
 		try:
-			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{func_name}")(**kwargs))
+			response = await execute_cdp_command(
+					"raise",
+					cdp_session,
+					self.get_devtools_object(f"fetch.{func_name}"),
+					**kwargs
+			)
 	
 			if response_handle_func is not None:
 				self._nursery_object.start_soon(response_handle_func, self, response)
@@ -328,7 +347,7 @@ async def _handle_auth_required(
 
 
 @dataclass
-class AuthRequiredSettings:
+class AuthRequiredSettings(AbstractEventSettings):
 	"""
 	Settings for handling the 'fetch.AuthRequired' event.
 
@@ -401,7 +420,7 @@ class _ContinueResponseParametersHandlers(TypedDict):
 	binary_response_headers: Optional[ParameterHandler]
 
 
-class _ContinueResponseAction(TypedDict):
+class _ContinueResponseAction(AbstractAction):
 	"""
 	Internal TypedDict for the 'continueResponse' action configuration within RequestPaused.
 
@@ -435,7 +454,7 @@ class _FulfillRequestParametersHandlers(TypedDict):
 	response_phrase: Optional[ParameterHandler]
 
 
-class _FulfillRequestAction(TypedDict):
+class _FulfillRequestAction(AbstractAction):
 	"""
 	Internal TypedDict for the 'fulfillRequest' action configuration within RequestPaused.
 
@@ -461,7 +480,7 @@ class _FailRequestParametersHandlers(TypedDict):
 	error_reason: ParameterHandler
 
 
-class _FailRequestAction(TypedDict):
+class _FailRequestAction(AbstractAction):
 	"""
 	Internal TypedDict for the 'failRequest' action configuration within RequestPaused.
 
@@ -495,7 +514,7 @@ class _ContinueRequestParametersHandlers(TypedDict):
 	intercept_response: Optional[ParameterHandler]
 
 
-class _ContinueRequestAction(TypedDict):
+class _ContinueRequestAction(AbstractAction):
 	"""
 	Internal TypedDict for the 'continueRequest' action configuration within RequestPaused.
 
@@ -527,7 +546,7 @@ class _RequestPausedActions(TypedDict):
 	continue_response: Optional[_ContinueResponseAction]
 
 
-class _RequestPausedActionsHandler(TypedDict):
+class _RequestPausedActionsHandler(AbstractEventActionsHandler):
 	"""
 	Internal TypedDict for the actions handler configuration for the 'RequestPaused' event.
 
@@ -540,7 +559,7 @@ class _RequestPausedActionsHandler(TypedDict):
 	actions: _RequestPausedActions
 
 
-class _RequestPaused(TypedDict):
+class _RequestPaused(AbstractEvent):
 	"""
 	Internal TypedDict representing the complete configuration for a 'RequestPaused' event listener.
 
@@ -590,7 +609,12 @@ async def _handle_request_paused(
 		response_handle_func = chosen_action_func["response_handle_func"]
 	
 		try:
-			response = await cdp_session.execute(self.get_devtools_object(f"fetch.{action_func_name}")(**kwargs))
+			response = await execute_cdp_command(
+					"raise",
+					cdp_session,
+					self.get_devtools_object(f"fetch.{action_func_name}"),
+					**kwargs
+			)
 	
 			if response_handle_func is not None:
 				self._nursery_object.start_soon(response_handle_func, self, response)
@@ -602,7 +626,7 @@ async def _handle_request_paused(
 
 
 @dataclass
-class ContinueResponseHandlersSettings:
+class ContinueResponseHandlersSettings(AbstractActionParametersHandlersSettings):
 	"""
 	Configuration for handlers that modify a response before it continues using `fetch.continueResponse`.
 
@@ -637,7 +661,7 @@ class ContinueResponseHandlersSettings:
 
 
 @dataclass
-class ContinueResponseSettings:
+class ContinueResponseSettings(AbstractActionSettings):
 	"""
 	Settings for the 'continueResponse' action for a paused request (from RequestPaused event).
 
@@ -678,7 +702,7 @@ class ContinueResponseSettings:
 
 
 @dataclass
-class FulfillRequestHandlersSettings:
+class FulfillRequestHandlersSettings(AbstractActionParametersHandlersSettings):
 	"""
 	Configuration for handlers that provide a mock response to a request using `fetch.fulfillRequest`.
 
@@ -716,7 +740,7 @@ class FulfillRequestHandlersSettings:
 
 
 @dataclass
-class FulfillRequestSettings:
+class FulfillRequestSettings(AbstractActionSettings):
 	"""
 	Settings for the 'fulfillRequest' action for a paused request (from RequestPaused event).
 
@@ -757,7 +781,7 @@ class FulfillRequestSettings:
 
 
 @dataclass
-class FailRequestHandlersSettings:
+class FailRequestHandlersSettings(AbstractActionParametersHandlersSettings):
 	"""
 	Configuration for handlers that specify the reason for failing a request using `fetch.failRequest`.
 
@@ -781,7 +805,7 @@ class FailRequestHandlersSettings:
 
 
 @dataclass
-class FailRequestSettings:
+class FailRequestSettings(AbstractActionSettings):
 	"""
 	Settings for the 'failRequest' action for a paused request (from RequestPaused event).
 
@@ -822,7 +846,7 @@ class FailRequestSettings:
 
 
 @dataclass
-class ContinueRequestHandlersSettings:
+class ContinueRequestHandlersSettings(AbstractActionParametersHandlersSettings):
 	"""
 	Configuration for handlers that modify a request before it continues using `fetch.continueRequest`.
 
@@ -860,7 +884,7 @@ class ContinueRequestHandlersSettings:
 
 
 @dataclass
-class ContinueRequestSettings:
+class ContinueRequestSettings(AbstractActionSettings):
 	"""
 	Settings for the 'continueRequest' action for a paused request (from RequestPaused event).
 
@@ -901,7 +925,7 @@ class ContinueRequestSettings:
 
 
 @dataclass
-class RequestPausedActionsSettings:
+class RequestPausedActionsSettings(AbstractEventActionsSettings):
 	"""
 	Container for configurations of possible actions to take when a request is paused.
 
@@ -942,7 +966,7 @@ class RequestPausedActionsSettings:
 
 
 @dataclass
-class RequestPausedActionsHandlerSettings:
+class RequestPausedActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 	"""
 	Settings for handling the 'fetch.RequestPaused' event by choosing and executing specific actions.
 
@@ -969,7 +993,7 @@ class RequestPausedActionsHandlerSettings:
 
 
 @dataclass
-class RequestPausedSettings:
+class RequestPausedSettings(AbstractEventSettings):
 	"""
 	Settings for handling the 'fetch.RequestPaused' event.
 
@@ -977,12 +1001,12 @@ class RequestPausedSettings:
 	including buffer size, the actions to take, and error handling.
 
 	Attributes:
-		listen_buffer_size (int): The buffer size for the event listener channel. Defaults to 50.
+		listen_buffer_size (int): The buffer size for the event listener channel. Defaults to 100.
 		actions_handler (RequestPausedActionsHandlerSettings): Configuration for the event's actions handler, determining which action(s) to take (e.g., continueRequest, fulfillRequest) and how to build their parameters. Defaults to empty `RequestPausedActionsHandlerSettings`.
 		on_error_func (on_error_func_type): An optional function to call if an error occurs during event handling. Defaults to None.
 	"""
 	
-	listen_buffer_size: int = 50
+	listen_buffer_size: int = 100
 	actions_handler: RequestPausedActionsHandlerSettings = RequestPausedActionsHandlerSettings()
 	on_error_func: on_error_func_type = None
 	
@@ -1039,7 +1063,7 @@ class _FetchHandlers(TypedDict):
 
 
 @dataclass
-class FetchHandlersSettings:
+class FetchHandlersSettings(AbstractDomainHandlersSettings):
 	"""
 	Container for all handler settings within the Fetch domain.
 
@@ -1070,7 +1094,7 @@ class FetchHandlersSettings:
 
 
 @dataclass
-class FetchEnableKwargsSettings:
+class FetchEnableKwargsSettings(AbstractDomainEnableKwargsSettings):
 	"""
 	Keyword arguments for enabling the Fetch domain using `fetch.enable`.
 
@@ -1103,7 +1127,7 @@ class FetchEnableKwargsSettings:
 		return _FetchEnableKwargs(**kwargs)
 
 
-class _Fetch(TypedDict):
+class _Fetch(AbstractDomain):
 	"""
 	Internal TypedDict for the complete Fetch domain configuration.
 
@@ -1126,7 +1150,7 @@ class _Fetch(TypedDict):
 
 
 @dataclass
-class FetchSettings:
+class FetchSettings(AbstractDomainSettings):
 	"""
 	Top-level configuration for the Fetch domain.
 
