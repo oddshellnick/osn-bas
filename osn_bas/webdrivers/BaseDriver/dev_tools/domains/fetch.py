@@ -41,19 +41,6 @@ if TYPE_CHECKING:
 	from osn_bas.webdrivers.BaseDriver.dev_tools.manager import DevTools
 
 
-class _FetchEnableKwargs(TypedDict, total=False):
-	"""
-	Internal TypedDict for keyword arguments to enable the Fetch domain.
-
-	Attributes:
-		patterns (Optional[list[Any]]): A list of request patterns to intercept.
-		handle_auth_requests (Optional[bool]): Whether to intercept authentication requests.
-	"""
-	
-	patterns: Optional[list[Any]]
-	handle_auth_requests: Optional[bool]
-
-
 class _ContinueWithAuthParametersHandlers(TypedDict):
 	"""
 	Internal TypedDict for handlers related to the 'continueWithAuth' action.
@@ -193,7 +180,7 @@ class ContinueWithAuthSettings(AbstractActionSettings):
 		)
 
 
-class _AuthRequiredActions(TypedDict, total=False):
+class _AuthRequiredActions(TypedDict):
 	"""
 	Internal TypedDict mapping action names for AuthRequired event to their configurations.
 
@@ -250,11 +237,11 @@ class AuthRequiredActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 
 	Attributes:
 		choose_action_func (auth_required_choose_action_func_type): A function that takes the DevTools instance and the event object and returns a list of action names (Literals) to execute. Defaults to `auth_required_choose_func`.
-		actions (AuthRequiredActionsSettings): Container for the configuration of the available actions. Defaults to an empty `AuthRequiredActionsSettings`.
+		actions (Optional[AuthRequiredActionsSettings]): Container for the configuration of the available actions. Defaults to None.
 	"""
 	
 	choose_action_func: "auth_required_choose_action_func_type" = auth_required_choose_func
-	actions: AuthRequiredActionsSettings = AuthRequiredActionsSettings()
+	actions: Optional[AuthRequiredActionsSettings] = None
 	
 	@property
 	def kwargs_func(self) -> build_kwargs_from_handlers_func_type:
@@ -277,7 +264,9 @@ class AuthRequiredActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 		
 		return _AuthRequiredActionsHandler(
 				choose_action_func=self.choose_action_func,
-				actions=self.actions.to_dict(),
+				actions=self.actions.to_dict()
+				if self.actions is not None
+				else AuthRequiredActionsSettings().to_dict(),
 		)
 
 
@@ -669,11 +658,11 @@ class ContinueResponseSettings(AbstractActionSettings):
 
 	Attributes:
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the `fetch.continueResponse` CDP command. Defaults to None.
-		parameters_handlers (ContinueResponseHandlersSettings): Configuration for the response parameter handlers that provide modified response details. Defaults to empty `ContinueResponseHandlersSettings`.
+		parameters_handlers (Optional[ContinueResponseHandlersSettings]): Configuration for the response parameter handlers that provide modified response details. Defaults to None.
 	"""
 	
 	response_handle_func: response_handle_func_type = None
-	parameters_handlers: ContinueResponseHandlersSettings = ContinueResponseHandlersSettings()
+	parameters_handlers: Optional[ContinueResponseHandlersSettings] = None
 	
 	@property
 	def kwargs_func(self) -> build_kwargs_from_handlers_func_type:
@@ -697,7 +686,9 @@ class ContinueResponseSettings(AbstractActionSettings):
 		return _ContinueResponseAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				parameters_handlers=self.parameters_handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict()
+				if self.parameters_handlers is not None
+				else ContinueResponseHandlersSettings().to_dict(),
 		)
 
 
@@ -892,11 +883,11 @@ class ContinueRequestSettings(AbstractActionSettings):
 
 	Attributes:
 		response_handle_func (response_handle_func_type): An optional awaitable function to process the response from the `fetch.continueRequest` CDP command. Defaults to None.
-		parameters_handlers (ContinueRequestHandlersSettings): Configuration for the request parameter handlers that provide modified request details. Defaults to empty `ContinueRequestHandlersSettings`.
+		parameters_handlers (Optional[ContinueRequestHandlersSettings]): Configuration for the request parameter handlers that provide modified request details. Defaults to None.
 	"""
 	
 	response_handle_func: response_handle_func_type = None
-	parameters_handlers: ContinueRequestHandlersSettings = ContinueRequestHandlersSettings()
+	parameters_handlers: Optional[ContinueRequestHandlersSettings] = None
 	
 	@property
 	def kwargs_func(self) -> build_kwargs_from_handlers_func_type:
@@ -920,7 +911,9 @@ class ContinueRequestSettings(AbstractActionSettings):
 		return _ContinueRequestAction(
 				kwargs_func=self.kwargs_func,
 				response_handle_func=self.response_handle_func,
-				parameters_handlers=self.parameters_handlers.to_dict(),
+				parameters_handlers=self.parameters_handlers.to_dict()
+				if self.parameters_handlers is not None
+				else ContinueRequestHandlersSettings().to_dict(),
 		)
 
 
@@ -972,11 +965,11 @@ class RequestPausedActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 
 	Attributes:
 		choose_action_func (request_paused_choose_action_func_type): A function that takes the DevTools instance and the event object and returns a list of action names (Literals) to execute. Defaults to `request_paused_choose_func`.
-		actions (RequestPausedActionsSettings): Container for the configuration of the available actions. Defaults to an empty `RequestPausedActionsSettings`.
+		actions (Optional[RequestPausedActionsSettings]): Container for the configuration of the available actions. Defaults to None.
 	"""
 	
 	choose_action_func: "request_paused_choose_action_func_type" = request_paused_choose_func
-	actions: RequestPausedActionsSettings = RequestPausedActionsSettings()
+	actions: Optional[RequestPausedActionsSettings] = None
 	
 	def to_dict(self) -> _RequestPausedActionsHandler:
 		"""
@@ -988,7 +981,9 @@ class RequestPausedActionsHandlerSettings(AbstractEventActionsHandlerSettings):
 		
 		return _RequestPausedActionsHandler(
 				choose_action_func=self.choose_action_func,
-				actions=self.actions.to_dict(),
+				actions=self.actions.to_dict()
+				if self.actions is not None
+				else RequestPausedActionsSettings().to_dict(),
 		)
 
 
@@ -1002,12 +997,12 @@ class RequestPausedSettings(AbstractEventSettings):
 
 	Attributes:
 		listen_buffer_size (int): The buffer size for the event listener channel. Defaults to 100.
-		actions_handler (RequestPausedActionsHandlerSettings): Configuration for the event's actions handler, determining which action(s) to take (e.g., continueRequest, fulfillRequest) and how to build their parameters. Defaults to empty `RequestPausedActionsHandlerSettings`.
+		actions_handler (Optional[RequestPausedActionsHandlerSettings]): Configuration for the event's actions handler, determining which action(s) to take (e.g., continueRequest, fulfillRequest) and how to build their parameters. Defaults to None.
 		on_error_func (on_error_func_type): An optional function to call if an error occurs during event handling. Defaults to None.
 	"""
 	
 	listen_buffer_size: int = 100
-	actions_handler: RequestPausedActionsHandlerSettings = RequestPausedActionsHandlerSettings()
+	actions_handler: Optional[RequestPausedActionsHandlerSettings] = None
 	on_error_func: on_error_func_type = None
 	
 	@property
@@ -1044,7 +1039,9 @@ class RequestPausedSettings(AbstractEventSettings):
 				class_to_use_path=self.class_to_use_path,
 				listen_buffer_size=self.listen_buffer_size,
 				handle_function=self.handle_function,
-				actions_handler=self.actions_handler.to_dict(),
+				actions_handler=self.actions_handler.to_dict()
+				if self.actions_handler is not None
+				else RequestPausedActionsHandlerSettings().to_dict(),
 				on_error_func=self.on_error_func,
 		)
 
@@ -1091,6 +1088,19 @@ class FetchHandlersSettings(AbstractDomainHandlersSettings):
 				if self.auth_required is not None
 				else None,
 		)
+
+
+class _FetchEnableKwargs(TypedDict, total=False):
+	"""
+	Internal TypedDict for keyword arguments to enable the Fetch domain.
+
+	Attributes:
+		patterns (Optional[list[Any]]): A list of request patterns to intercept.
+		handle_auth_requests (Optional[bool]): Whether to intercept authentication requests.
+	"""
+	
+	patterns: Optional[list[Any]]
+	handle_auth_requests: Optional[bool]
 
 
 @dataclass
@@ -1159,11 +1169,11 @@ class FetchSettings(AbstractDomainSettings):
 
 	Attributes:
 		enable_func_kwargs (Optional[FetchEnableKwargsSettings]): Keyword arguments for enabling the Fetch domain using `fetch.enable`. Defaults to None.
-		handlers (FetchHandlersSettings): Container for all handler settings within the Fetch domain (e.g., RequestPaused, AuthRequired). Defaults to empty `FetchHandlersSettings`.
+		handlers (FetchHandlersSettings): Container for all handler settings within the Fetch domain (e.g., RequestPaused, AuthRequired). Defaults to None.
 	"""
 	
 	enable_func_kwargs: Optional[FetchEnableKwargsSettings] = None
-	handlers: FetchHandlersSettings = FetchHandlersSettings()
+	handlers: Optional[FetchHandlersSettings] = None
 	
 	@property
 	def disable_func_path(self) -> str:
@@ -1211,9 +1221,11 @@ class FetchSettings(AbstractDomainSettings):
 				enable_func_path=self.enable_func_path,
 				enable_func_kwargs=self.enable_func_kwargs.to_dict()
 				if self.enable_func_kwargs is not None
-				else _FetchEnableKwargs(),
+				else FetchEnableKwargsSettings().to_dict(),
 				disable_func_path=self.disable_func_path,
-				handlers=self.handlers.to_dict(),
+				handlers=self.handlers.to_dict()
+				if self.handlers is not None
+				else FetchHandlersSettings().to_dict(),
 		)
 
 
