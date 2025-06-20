@@ -1,13 +1,15 @@
+import inspect
+
 import trio
+from pathlib import Path
 from types import TracebackType
 from collections.abc import Sequence
-from selenium.webdriver.common.bidi.cdp import CdpSession, open_cdp
+from osn_bas.webdrivers.utils import get_traceback
 from selenium.webdriver.remote.bidi_connection import BidiConnection
 from contextlib import (
 	AbstractAsyncContextManager,
 	asynccontextmanager
 )
-from osn_bas.webdrivers.BaseDriver.dev_tools.domains.abstract import AbstractEvent
 from osn_bas.webdrivers.BaseDriver.protocols import (
 	TrioWebDriverWrapperProtocol
 )
@@ -19,12 +21,22 @@ from typing import (
 	Union,
 	cast
 )
+from osn_bas.webdrivers.BaseDriver.dev_tools.logger import LoggerManager
 from osn_bas.webdrivers.BaseDriver.dev_tools.errors import (
 	CantEnterDevToolsContextError
 )
+from selenium.webdriver.common.bidi.cdp import (
+	CdpConnectionClosed,
+	CdpSession,
+	open_cdp
+)
+from osn_bas.webdrivers.BaseDriver.dev_tools.domains.abstract import (
+	AbstractDomain,
+	AbstractEvent
+)
 from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+	TargetData,
 	execute_cdp_command,
-	log_error,
 	log_on_error,
 	warn_if_active
 )
@@ -58,7 +70,6 @@ class DevTools:
 		_nursery_object (Optional[trio.Nursery]): The Trio nursery object when active, managing concurrent tasks.
 		_domains_settings (Domains): Settings for configuring DevTools domain handlers.
 		_handling_targets (list[str]): list of target IDs currently being handled by event listeners.
-		cache (dict[Any, Any]): A dictionary for caching data across DevTools event handlers.
 		main_lock (trio.Lock): A lock used for synchronizing access to shared resources, like the list of handled targets.
 		exit_event (Optional[trio.Event]): Trio Event to signal exiting of DevTools event handling.
 
@@ -88,38 +99,23 @@ class DevTools:
 		self._nursery: Optional[AbstractAsyncContextManager[trio.Nursery, Optional[bool]]] = None
 		self._nursery_object: Optional[trio.Nursery] = None
 		self._domains_settings: Domains = {}
-		self._handling_targets: list[str] = []
-		self.cache = {}
+		self._handling_targets: dict[str, TargetData] = {}
+		self._cached_devtools_objects: dict[str, Any] = {}
 		self.main_lock = trio.Lock()
 		self.exit_event: Optional[trio.Event] = None
-	
-	async def _setup_target(self, cdp_session: CdpSession, target_setup_event: trio.Event):
-		"""
-		Sets up event listeners and necessary configurations for a specific CDP target session.
-
-		This involves enabling target discovery and auto-attachment, starting the new target listener,
-		enabling configured domains, and starting event handlers for each domain.
-
-		Args:
-			cdp_session (CdpSession): The CDP session for the target being set up.
-			target_setup_event (trio.Event): An event to signal when the target setup is complete.
-		"""
+		self._main_target_data: Optional[TargetData] = None
 		
+		self._logger = LoggerManager(
+				Path(
+						"C:/Users/oddshellnick/Desktop/Документы/Образование/Программирование/Программы/Python/MyLibraries/osn-bas/bin/log.txt"
+				)
+		)
+
+	async def _setup_target(self, target_data: TargetData, target_setup_event: trio.Event):
 		try:
-			await execute_cdp_command(
-					"log",
-					cdp_session,
-					self.get_devtools_object("target.set_discover_targets"),
-					True
-			)
-			await execute_cdp_command(
-					"log",
-					cdp_session,
-					self.get_devtools_object("target.set_auto_attach"),
-					auto_attach=True,
-					wait_for_debugger_on_start=True,
-					flatten=True
-			)
+			await self._log_step(target_data=target_data, message="Target setup started.")
+		
+			await self._setup_new_targets_attaching(target_data)
 		
 			target_ready_events: list[trio.Event] = []
 		
@@ -128,7 +124,7 @@ class DevTools:
 		
 			self._nursery_object.start_soon(
 					self._run_new_targets_listener,
-					cdp_session,
+					target_data,
 					new_targets_listener_ready_event
 			)
 		
@@ -136,9 +132,10 @@ class DevTools:
 				if domain_config.get("enable_func_path", None) is not None:
 					enable_func_kwargs = domain_config.get("enable_func_kwargs", {})
 					await execute_cdp_command(
+							self,
+							target_data,
 							"log",
-							cdp_session,
-							self.get_devtools_object(domain_config["enable_func_path"]),
+							await self.get_devtools_object(domain_config["enable_func_path"]),
 							**enable_func_kwargs
 					)
 		
@@ -146,7 +143,7 @@ class DevTools:
 				target_ready_events.append(domain_handlers_ready_event)
 				self._nursery_object.start_soon(
 						self._run_events_handlers,
-						cdp_session,
+						target_data,
 						domain_handlers_ready_event,
 						domain_config
 				)
@@ -155,55 +152,53 @@ class DevTools:
 				await domain_handlers_ready_event.wait()
 		
 			await execute_cdp_command(
+					self,
+					target_data,
 					"log",
-					cdp_session,
-					self.get_devtools_object("runtime.run_if_waiting_for_debugger")
+					await self.get_devtools_object("runtime.run_if_waiting_for_debugger")
 			)
-		except (trio.Cancelled, trio.EndOfChannel):
-			pass
-		finally:
+		
+			await self._log_step(target_data=target_data, message="Target setup complete.")
+
 			target_setup_event.set()
-	
+		except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
+			pass
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
+
 	async def _run_new_targets_listener(
 			self,
-			cdp_session: CdpSession,
+			target_data: TargetData,
 			new_targets_listener_ready_event: trio.Event
 	):
-		"""
-		Processes new browser targets as they are created.
+		await self._log_step(target_data=target_data, message="New Targets listener starting.")
 
-		Listens for 'target.TargetCreated' events, which are emitted when new targets (like tabs or windows) are created in the browser.
-
-		Args:
-			cdp_session (CdpSession): The CDP session object to listen for target creation events.
-			new_targets_listener_ready_event (trio.Event): An event to signal when the listener is ready.
-		"""
+		try:
+			receiver_channel: trio.MemoryReceiveChannel = target_data.cdp_session.listen(
+					await self.get_devtools_object("target.TargetCreated"),
+					await self.get_devtools_object("target.AttachedToTarget"),
+					await self.get_devtools_object("target.TargetInfoChanged"),
+					buffer_size=1000
+			)
+			new_targets_listener_ready_event.set()
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
 		
-		await execute_cdp_command(
-				"log",
-				cdp_session,
-				self.get_devtools_object("target.set_discover_targets"),
-				True
-		)
-		
-		receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(
-				self.get_devtools_object("target.TargetCreated"),
-				self.get_devtools_object("target.AttachedToTarget"),
-				self.get_devtools_object("target.TargetInfoChanged"),
-				buffer_size=500
-		)
-		new_targets_listener_ready_event.set()
+		await self._log_step(target_data=target_data, message="New Targets listener started.")
 		
 		while True:
 			try:
 				event = await receiver_channel.receive()
-				self._nursery_object.start_soon(self._handle_new_target, event)
-			except (trio.Cancelled, trio.EndOfChannel):
+				self._nursery_object.start_soon(self._handle_new_target, target_data, event)
+			except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
 				break
-			except (Exception,):
-				log_error()
-	
-	async def _handle_new_target(self, target_event: Any):
+			except (Exception,) as error:
+				await self._log_error(target_data=target_data)
+				raise error
+
+	async def _handle_new_target(self, previous_target_data: TargetData, target_event: Any):
 		"""
 		Handles a single new target event.
 
@@ -214,46 +209,32 @@ class DevTools:
 			target_event (Any): The target event object (e.g., TargetCreated) from which the target ID is extracted.
 		"""
 		
+		await self._log_step(target_data=previous_target_data, message=f"New Target event received: {target_event}.")
+		
 		try:
 			if await self._add_target_id(target_event):
-				async with self._new_session_manager(target_event) as new_session:
+				target_id = target_event.target_info.target_id
+				print(target_event, "/n", self._handling_targets, end="\n\n\n\n\n\n")
+		
+				async with self._new_session_manager(self._handling_targets[target_id], target_event) as new_session:
+					self._handling_targets[target_id].cdp_session = new_session
+		
 					listeners_started_event = trio.Event()
-					await self._setup_target(new_session, listeners_started_event)
+					await self._setup_target(self._handling_targets[target_id], listeners_started_event)
 					await listeners_started_event.wait()
 		
 					await self.exit_event.wait()
 		
-				await self._remove_target_id(target_event)
-		except (trio.Cancelled, trio.EndOfChannel):
+				await self._remove_target_id(self._handling_targets[target_id])
+		except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
 			pass
 		except (Exception,):
-			log_error()
+			await self._log_error(target_data=previous_target_data)
 	
-	@property
-	def main_cdp_session(self) -> CdpSession:
-		"""
-		Retrieves the main CDP session object associated with the WebDriver.
+	async def _log_error(self, target_data: TargetData):
+		await self._logger.log(target_data=target_data, level="ERROR", message=get_traceback(), source_function=" <- ".join(stack.function for stack in inspect.stack()[1:]))
 
-		Returns:
-			CdpSession: The main CDP session object.
-		"""
-		
-		return self._bidi_connection_object.session
-	
-	@property
-	def devtools_module(self) -> Any:
-		"""
-		Retrieves the DevTools API root object from the BiDi connection.
-
-		This object provides access to all CDP domains and their methods.
-
-		Returns:
-			Any: The root DevTools API object.
-		"""
-		
-		return self._bidi_connection_object.devtools
-	
-	def get_devtools_object(self, path: str) -> Any:
+	async def get_devtools_object(self, path: str) -> Any:
 		"""
 		Navigates and retrieves a specific object within the DevTools API structure.
 
@@ -266,117 +247,115 @@ class DevTools:
 		Returns:
 			Any: The DevTools API object located at the specified path.
 		"""
-		
-		object_ = self.devtools_module
-		
-		for path_part in path.split("."):
-			object_ = getattr(object_, path_part)
-		
-		return object_
-	
+
+		try:
+			if path in self._cached_devtools_objects:
+				return self._cached_devtools_objects[path]
+
+			object_ = self._bidi_connection_object.devtools
+
+			for path_part in path.split("."):
+				object_ = getattr(object_, path_part)
+
+			self._cached_devtools_objects[path] = object_
+
+			return object_
+		except (Exception,) as error:
+			await self._log_error(target_data=TargetData())
+			raise error
+
 	async def _run_event_handler(
 			self,
-			cdp_session: CdpSession,
+			target_data: TargetData,
 			domain_handler_ready_event: trio.Event,
 			event_config: AbstractEvent
 	):
-		"""
-		Runs a specific event listener, processing events from a CDP channel.
+		await self._log_step(
+				target_data=target_data,
+				message=f"Event handler '{event_config['class_to_use_path']}' starting."
+		)
 
-		This method sets up a listener for a specific CDP event using the provided configuration.
-		It continuously receives events from the channel and starts a new task in the nursery
-		to execute the handler function for each event.
-
-		Args:
-			cdp_session (CdpSession): The CDP session to listen on.
-			domain_handler_ready_event (trio.Event): An event to signal when this specific event handler is ready.
-			event_config (AbstractEvent): The configuration for the event listener.
-		"""
-		
 		try:
-			receiver_channel: trio.MemoryReceiveChannel = cdp_session.listen(
-					self.get_devtools_object(event_config["class_to_use_path"]),
+			receiver_channel: trio.MemoryReceiveChannel = target_data.cdp_session.listen(
+					await self.get_devtools_object(event_config["class_to_use_path"]),
 					buffer_size=event_config["listen_buffer_size"]
 			)
-		except (Exception,):
-			log_error()
-		
-			return
-		finally:
+
 			domain_handler_ready_event.set()
+			handler = event_config["handle_function"]
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
 		
-		handler = event_config["handle_function"]
+		await self._log_step(
+				target_data=target_data,
+				message=f"Event handler '{event_config['class_to_use_path']}' started."
+		)
 		
 		while True:
 			try:
 				event = await receiver_channel.receive()
-				self._nursery_object.start_soon(handler, self, cdp_session, event_config, event)
-			except (trio.Cancelled, trio.EndOfChannel):
+				self._nursery_object.start_soon(handler, self, target_data, event_config, event)
+			except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
 				break
-			except (Exception,):
-				log_error()
-	
+			except (Exception,) as error:
+				await self._log_error(target_data=target_data)
+				raise error
+
 	async def _run_events_handlers(
 			self,
-			cdp_session: CdpSession,
+			target_data: TargetData,
 			events_ready_event: trio.Event,
-			domain_config
+			domain_config: AbstractDomain
 	):
-		"""
-		Starts all configured event handlers for a specific DevTools domain within a CDP session.
+		await self._log_step(
+				target_data=target_data,
+				message=f"Domain '{domain_config['name']}' events handlers setup started."
+		)
 
-		For each event handler defined in the domain configuration, it starts a new task
-		in the nursery using `_run_event_handler`.
+		try:
+			events_handlers_ready_events: list[trio.Event] = []
+		
+			for event_name, event_config in domain_config.get("handlers", {}).items():
+				if event_config is not None:
+					event_handler_ready_event = trio.Event()
+					events_handlers_ready_events.append(event_handler_ready_event)
+		
+					self._nursery_object.start_soon(
+							self._run_event_handler,
+							target_data,
+							event_handler_ready_event,
+							event_config
+					)
+		
+			for event_handler_ready_event in events_handlers_ready_events:
+				await event_handler_ready_event.wait()
+		
+			events_ready_event.set()
+		
+			await self._log_step(
+					target_data=target_data,
+					message=f"Domain '{domain_config['name']}' events handlers setup complete."
+			)
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
 
-		Args:
-			cdp_session (CdpSession): The CDP session to run event handlers on.
-			events_ready_event (trio.Event): An event to signal when all handlers for this domain are ready.
-			domain_config (dict[str, Any]): The configuration dictionary for the domain, including its event handlers.
-		"""
-		
-		events_handlers_ready_events: list[trio.Event] = []
-		
-		for event_name, event_config in domain_config.get("handlers", {}).items():
-			if event_config is not None:
-				event_handler_ready_event = trio.Event()
-				events_handlers_ready_events.append(event_handler_ready_event)
-		
-				self._nursery_object.start_soon(
-						self._run_event_handler,
-						cdp_session,
-						event_handler_ready_event,
-						event_config
-				)
-		
-		for event_handler_ready_event in events_handlers_ready_events:
-			await event_handler_ready_event.wait()
-		
-		events_ready_event.set()
-	
-	async def _remove_target_id(self, target_event: Any) -> bool:
-		"""
-		Atomically removes a target ID from the list of currently handled targets.
+	async def _remove_target_id(self, target_data: TargetData) -> bool:
+		target_id = target_data.target_id
 
-		The target ID is extracted from the provided target event object.
-
-		Args:
-			target_event (Any): The target event object (e.g., TargetCreated, TargetDestroyed) containing the target ID.
-
-		Returns:
-			bool: True if the target ID was found and removed, False otherwise.
-		"""
-		
-		target_id = target_event.target_info.target_id
-		
 		async with self.main_lock:
 			try:
-				self._handling_targets.remove(target_id)
+				self._handling_targets.pop(target_data.target_id)
+				await self._log_step(target_data=self._handling_targets[target_id], message=f"Target '{target_id}' removed.")
+				await self._logger.remove_session(target_data)
+
 				return True
-			except ValueError:
+			except KeyError:
 				return False
-	
+
 	@property
-	def _websocket_url(self) -> Optional[str]:
+	async def _websocket_url(self) -> Optional[str]:
 		"""
 		Retrieves the WebSocket URL for DevTools from the WebDriver.
 
@@ -386,19 +365,23 @@ class DevTools:
 		Returns:
 			Optional[str]: The WebSocket URL for DevTools, or None if it cannot be retrieved.
 		"""
-		
-		driver = self._webdriver.driver
-		
-		if driver is None:
-			return None
-		
-		if driver.caps.get("se:cdp"):
-			return driver.caps.get("se:cdp")
-		
-		return driver._get_cdp_details()[1]
+
+		try:
+			driver = self._webdriver.driver
+
+			if driver is None:
+				return None
+
+			if driver.caps.get("se:cdp"):
+				return driver.caps.get("se:cdp")
+
+			return driver._get_cdp_details()[1]
+		except (Exception,) as error:
+			await self._log_error(target_data=TargetData())
+			raise error
 	
 	@asynccontextmanager
-	async def _new_session_manager(self, target_event: Any) -> AsyncGenerator[CdpSession, None]:
+	async def _new_session_manager(self, target_data: TargetData, target_event: Any) -> AsyncGenerator[CdpSession, None]:
 		"""
 		Manages a new CDP session for a specific target, using async context management.
 
@@ -413,12 +396,16 @@ class DevTools:
 			AsyncGenerator[CdpSession, None]: An asynchronous generator that yields a CdpSession object, allowing for operations within the session context.
 		"""
 		
-		target_id = target_event.target_info.target_id
+		try:
+			target_id = target_event.target_info.target_id
 		
-		async with open_cdp(self._websocket_url) as new_connection:
-			async with new_connection.open_session(target_id) as new_session:
-				yield new_session
-	
+			async with open_cdp(await self._websocket_url) as new_connection:
+				async with new_connection.open_session(target_id) as new_session:
+					yield new_session
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
+
 	async def _add_target_id(self, target_event: Any) -> bool:
 		"""
 		Atomically adds a target ID to the list of currently handled targets if it's not already present.
@@ -432,50 +419,104 @@ class DevTools:
 			bool: True if the target ID was added (i.e., it was not already present), False otherwise.
 		"""
 		
-		target_id = target_event.target_info.target_id
+		try:
+			target_id = target_event.target_info.target_id
 		
-		async with self.main_lock:
-			if target_id not in self._handling_targets:
-				self._handling_targets.append(target_id)
-				return True
-			else:
-				return False
-	
+			async with self.main_lock:
+				if target_id not in self._handling_targets:
+					self._handling_targets[target_id] = TargetData(
+							cdp_session=None,
+							target_id=target_id,
+							type_=target_event.target_info.type_,
+							title=target_event.target_info.title,
+							url=target_event.target_info.url,
+							attached=target_event.target_info.attached
+					)
+
+					await self._logger.add_session(self._handling_targets[target_id])
+					await self._log_step(target_data=self._handling_targets[target_id], message=f"Target '{target_id}' added.")
+		
+					return True
+				else:
+					self._handling_targets[target_id].type_ = target_event.target_info.type_
+					self._handling_targets[target_id].title = target_event.target_info.title
+					self._handling_targets[target_id].url = target_event.target_info.url
+					self._handling_targets[target_id].attached = target_event.target_info.attached
+		
+					return False
+		except (Exception,) as error:
+			await self._log_error(target_data=TargetData())
+			raise error
+
+	async def _setup_new_targets_attaching(self, target_data: TargetData):
+		try:
+			target_filter = (await self.get_devtools_object("target.TargetFilter"))(
+					[
+						{"type": "page", "exclude": False},
+						{"type": "tab", "exclude": False},
+						# {"type": "iframe", "exclude": False},
+						# {"type": "browser", "exclude": False},
+						{"exclude": True}
+					]
+			)
+		
+			await execute_cdp_command(
+					self,
+					target_data,
+					"log",
+					await self.get_devtools_object("target.set_discover_targets"),
+					discover=True,
+					filter_=target_filter,
+			)
+			await execute_cdp_command(
+					self,
+					target_data,
+					"log",
+					await self.get_devtools_object("target.set_auto_attach"),
+					auto_attach=True,
+					wait_for_debugger_on_start=True,
+					flatten=True,
+					filter_=target_filter,
+			)
+		except (Exception,) as error:
+			await self._log_error(target_data=target_data)
+			raise error
+
+	async def get_all_targets(self) -> list[Any]:
+		return await self._bidi_connection_object.session.execute((await self.get_devtools_object("target.get_targets"))())
+
 	async def __aenter__(self) -> TrioWebDriverWrapperProtocol:
-		"""
-		Asynchronously enters the DevTools event handling context.
-
-		This method is called when entering an `async with` block with a DevTools instance.
-		It initializes the BiDi connection, starts a Trio nursery to manage event listeners,
-		and then starts listening for DevTools events on the main target.
-
-		Returns:
-			TrioWebDriverWrapperProtocol: Returns a wrapped WebDriver object that can be used to interact with the browser
-				while DevTools event handling is active.
-
-		Raises:
-			CantEnterDevToolsContextError: If the WebDriver driver is not initialized, indicating that a browser session has not been started yet.
-		"""
-		
 		if self._webdriver.driver is None:
 			raise CantEnterDevToolsContextError("Driver is not initialized")
-		
+
 		self._bidi_connection: AbstractAsyncContextManager[BidiConnection, Any] = self._webdriver.driver.bidi_connection()
 		self._bidi_connection_object = await self._bidi_connection.__aenter__()
-		
+
 		self._nursery = trio.open_nursery()
 		self._nursery_object = await self._nursery.__aenter__()
-		
+
 		self.exit_event = trio.Event()
-		
+
+		main_target = (await self.get_all_targets())[0]
+		self._main_target_data = TargetData(
+				cdp_session=self._bidi_connection_object.session,
+				target_id=main_target.target_id,
+				type_=main_target.type_,
+				title=main_target.title,
+				attached=main_target.attached,
+		)
+
+		await self._logger.__aenter__()
+		await self._logger.add_session(self._main_target_data)
+
 		listeners_started_event = trio.Event()
-		await self._setup_target(self.main_cdp_session, listeners_started_event)
+		await self._setup_target(self._main_target_data, listeners_started_event)
 		await listeners_started_event.wait()
-		
+
 		self._is_active = True
-		
+
 		return cast(TrioWebDriverWrapperProtocol, self._webdriver.to_wrapper())
-	
+
 	async def __aexit__(
 			self,
 			exc_type: Optional[type],
@@ -499,43 +540,50 @@ class DevTools:
 		@log_on_error
 		def _close_nursery_object():
 			"""Closes the Trio nursery object and cancels all tasks within it."""
-			
+
 			if self._nursery_object is not None:
 				self._nursery_object.cancel_scope.cancel()
 				self._nursery_object = None
-		
+
 		@log_on_error
 		async def _close_nursery():
 			"""Asynchronously exits the Trio nursery context manager."""
-			
+
 			if self._nursery is not None:
 				await self._nursery.__aexit__(exc_type, exc_val, exc_tb)
 				self._nursery = None
-		
+
 		@log_on_error
 		async def _close_bidi_connection():
 			"""Asynchronously exits the BiDi connection context manager."""
-			
+
 			if self._bidi_connection is not None:
 				await self._bidi_connection.__aexit__(exc_type, exc_val, exc_tb)
 				self._bidi_connection = None
 				self._bidi_connection_object = None
 				self._bidi_devtools = None
-		
+
 		@log_on_error
 		def _activate_exit_event():
 			"""Sets the exit event to signal listeners to stop."""
-			
+
 			if self.exit_event is not None:
 				self.exit_event.set()
 				self.exit_event = None
-		
+
+		await self._log_step(
+				target_data=self._main_target_data if self._main_target_data is not None else TargetData(),
+				message=f"Exit DevTools context with traceback:\n{get_traceback()}"
+		)
+
 		if self._is_active:
 			_activate_exit_event()
 			_close_nursery_object()
 			await _close_nursery()
 			await _close_bidi_connection()
-		
+			await self._logger.__aexit__(exc_type, exc_val, exc_tb)
+
+			self._main_target_data = None
 			self._is_active = False
 	
 	@property
@@ -614,3 +662,6 @@ class DevTools:
 		
 		for domain_name, domain_settings in settings.to_dict().items():
 			self._set_handler_settings(domain_name, domain_settings)
+
+	async def _log_step(self, target_data: TargetData, message: str):
+		await self._logger.log(target_data=target_data, level="INFO", message=message, source_function=" <- ".join(stack.function for stack in inspect.stack()[1:]))

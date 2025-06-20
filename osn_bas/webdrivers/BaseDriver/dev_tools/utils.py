@@ -3,11 +3,13 @@ import logging
 import warnings
 import traceback
 import functools
+from dataclasses import dataclass
 from selenium.webdriver.common.bidi.cdp import CdpSession
 from typing import (
 	Any,
 	Callable,
 	Literal,
+	Optional,
 	TYPE_CHECKING
 )
 
@@ -83,20 +85,42 @@ def log_error():
 	logging.log(logging.ERROR, error)
 
 
+@dataclass
+class TargetData:
+	cdp_session: Optional[CdpSession] = None
+	target_id: Optional[str] = None
+	type_: Optional[str] = None
+	title: Optional[str] = None
+	url: Optional[str] = None
+	attached: Optional[bool] = None
+	
+	def to_dict(self) -> dict[str, Any]:
+		return {
+			"cdp_session": self.cdp_session,
+			"target_id": self.target_id,
+			"type": self.type_,
+			"title": self.title,
+			"url": self.url,
+		}
+
+
 async def execute_cdp_command(
+		self: "DevTools",
+		target_data: TargetData,
 		error_mode: Literal["raise", "log", "pass"],
-		cdp_session: CdpSession,
 		function: Callable,
 		*args,
 		**kwargs
 ) -> Any:
 	try:
-		return await cdp_session.execute(function(*args, **kwargs))
-	except Exception as error:
+		return await target_data.cdp_session.execute(function(*args, **kwargs))
+	except (Exception,) as error:
 		if error_mode == "raise":
 			raise error
 		elif error_mode == "log":
+			await self._log_error(target_data=target_data)
 			log_error()
+	
 			return ExceptionThrown(error)
 		elif error_mode == "pass":
 			return ExceptionThrown(error)

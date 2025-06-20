@@ -1,5 +1,5 @@
 import trio
-from selenium.webdriver.common.bidi.cdp import CdpSession
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import TargetData
 from typing import (
 	Any,
 	Awaitable,
@@ -360,13 +360,16 @@ class AbstractActionSettings:
 kwargs_type = dict[str, Any]
 kwargs_output_type = Awaitable[kwargs_type]
 build_kwargs_from_handlers_func_type = Optional[
-	Callable[["DevTools", dict[str, Optional[ParameterHandler]], Any], kwargs_output_type]
+	Callable[
+		["DevTools", TargetData, dict[str, Optional[ParameterHandler]], Any],
+		kwargs_output_type
+	]
 ]
-parameter_handler_type = Callable[["DevTools", trio.Event, Any, Any, dict[str, Any]], Awaitable[None]]
-event_choose_action_func_type = Callable[["DevTools", Any], list]
-handle_function = Callable[["DevTools", CdpSession, Any, Any], Awaitable[None]]
-response_handle_func_type = Optional[Callable[["DevTools", Any], Awaitable[Any]]]
-on_error_func_type = Optional[Callable[["DevTools", Any, Exception], None]]
+parameter_handler_type = Callable[["DevTools", TargetData, trio.Event, Any, Any, dict[str, Any]], Awaitable[None]]
+event_choose_action_func_type = Callable[["DevTools", TargetData, Any], list]
+handle_function = Callable[["DevTools", TargetData, Any, Any], Awaitable[None]]
+response_handle_func_type = Optional[Callable[["DevTools", TargetData, Any], Awaitable[Any]]]
+on_error_func_type = Optional[Callable[["DevTools", TargetData, Any, Exception], None]]
 AnyMapping = Mapping[str, Any]
 AnyCallable = Callable[..., Any]
 AbstractDomainHandlers = Mapping[str, AbstractEvent]

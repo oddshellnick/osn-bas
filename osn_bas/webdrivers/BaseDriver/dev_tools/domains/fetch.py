@@ -1,7 +1,10 @@
 import trio
 from dataclasses import dataclass
-from selenium.webdriver.common.bidi.cdp import CdpSession
-from osn_bas.webdrivers.BaseDriver.dev_tools.utils import execute_cdp_command
+from selenium.webdriver.common.bidi.cdp import CdpConnectionClosed
+from osn_bas.webdrivers.BaseDriver.dev_tools.utils import (
+	TargetData,
+	execute_cdp_command
+)
 from typing import (
 	Any,
 	Awaitable,
@@ -83,6 +86,7 @@ class ContinueWithAuthParameterHandlersSettings(AbstractActionParametersHandlers
 
 async def _build_kwargs_from_handlers_func(
 		self: "DevTools",
+		target_data: TargetData,
 		handlers: Mapping[str, Optional[ParameterHandler]],
 		event: Any
 ) -> kwargs_type:
@@ -102,28 +106,38 @@ async def _build_kwargs_from_handlers_func(
 		kwargs_type: A dictionary of keyword arguments built from the handlers' outputs, typically including the request/auth challenge ID and parameters modified by handlers.
 	"""
 	
-	kwargs = {"request_id": event.request_id}
+	await self._log_step(
+			target_data=target_data,
+			message=f"Started to build kwargs for '{event}'"
+	)
 	
-	kwargs_ready_events: list[trio.Event] = []
+	try:
+		kwargs = {"request_id": event.request_id}
 	
-	for handler_name, handler_settings in handlers.items():
-		if handler_settings is not None:
-			kwargs_ready_event = trio.Event()
-			kwargs_ready_events.append(kwargs_ready_event)
+		kwargs_ready_events: list[trio.Event] = []
 	
-			self._nursery_object.start_soon(
-					handler_settings["func"],
-					self,
-					kwargs_ready_event,
-					handler_settings["instances"],
-					event,
-					kwargs
-			)
+		for handler_name, handler_settings in handlers.items():
+			if handler_settings is not None:
+				kwargs_ready_event = trio.Event()
+				kwargs_ready_events.append(kwargs_ready_event)
 	
-	for kwargs_ready_event in kwargs_ready_events:
-		await kwargs_ready_event.wait()
+				self._nursery_object.start_soon(
+						handler_settings["func"],
+						self,
+						target_data,
+						kwargs_ready_event,
+						handler_settings["instances"],
+						event,
+						kwargs
+				)
 	
-	return kwargs
+		for kwargs_ready_event in kwargs_ready_events:
+			await kwargs_ready_event.wait()
+	
+		return kwargs
+	except (Exception,) as error:
+		await self._log_error(target_data=target_data)
+		raise error
 
 
 class _ContinueWithAuth(TypedDict):
@@ -293,46 +307,46 @@ class _AuthRequired(AbstractEvent):
 
 async def _handle_auth_required(
 		self: "DevTools",
-		cdp_session: CdpSession,
+		target_data: TargetData,
 		handler_settings: _AuthRequired,
 		event: Any
 ):
-	"""
-	Handles the 'fetch.AuthRequired' event.
+	await self._log_step(target_data=target_data, message=f"Started to handle for '{event}'")
+	
+	try:
+		chosen_actions_func_names = handler_settings["actions_handler"]["choose_action_func"](self, target_data, event)
+		await self._log_step(target_data=target_data, message=f"Chosen actions: '{chosen_actions_func_names}'")
 
-	This function determines which action to take based on the `choose_action_func` defined
-	in the handler settings and executes the corresponding CDP command (e.g., `fetch.continueWithAuth`)
-	with arguments built by the associated parameter handlers.
+		for action_func_name in chosen_actions_func_names:
+			chosen_func = handler_settings["actions_handler"]["actions"][action_func_name]
+			kwargs = await chosen_func["kwargs_func"](self, target_data, chosen_func["parameters_handlers"], event)
+			await self._log_step(target_data=target_data, message=f"Kwargs for '{action_func_name}': '{kwargs}'")
+			response_handle_func = chosen_func["response_handle_func"]
 
-	Args:
-		self ("DevTools"): The DevTools instance.
-		cdp_session (CdpSession): The active CDP session where the event occurred.
-		handler_settings (_AuthRequired): The configuration settings for this 'AuthRequired' event handler.
-		event (Any): The 'fetch.AuthRequired' event object received from the CDP session.
-	"""
-	
-	chosen_func_names = handler_settings["actions_handler"]["choose_action_func"](self, event)
-	
-	for func_name in chosen_func_names:
-		chosen_func = handler_settings["actions_handler"]["actions"][func_name]
-		kwargs = await chosen_func["kwargs_func"](self, chosen_func["parameters_handlers"], event)
-		response_handle_func = chosen_func["response_handle_func"]
-	
-		try:
-			response = await execute_cdp_command(
-					"raise",
-					cdp_session,
-					self.get_devtools_object(f"fetch.{func_name}"),
-					**kwargs
-			)
-	
-			if response_handle_func is not None:
-				self._nursery_object.start_soon(response_handle_func, self, response)
-		except (Exception,) as error:
-			on_error = handler_settings["on_error_func"]
-	
-			if on_error is not None:
-				on_error(self, event, error)
+			try:
+				response = await execute_cdp_command(
+						self,
+						target_data,
+						"raise",
+						await self.get_devtools_object(f"fetch.{action_func_name}"),
+						**kwargs
+				)
+				await self._log_step(target_data=target_data, message=f"Function '{action_func_name}' response: '{response}'")
+
+				if response_handle_func is not None:
+					self._nursery_object.start_soon(response_handle_func, self, response)
+			except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
+				pass
+			except (Exception,) as error:
+				await self._log_error(target_data=target_data)
+
+				on_error = handler_settings["on_error_func"]
+
+				if on_error is not None:
+					on_error(self, target_data, event, error)
+	except (Exception,) as error:
+		await self._log_error(target_data=target_data)
+		raise error
 
 
 @dataclass
@@ -571,47 +585,48 @@ class _RequestPaused(AbstractEvent):
 
 async def _handle_request_paused(
 		self: "DevTools",
-		cdp_session: CdpSession,
+		target_data: TargetData,
 		handler_settings: _RequestPaused,
 		event: Any
 ):
-	"""
-	Handles the 'fetch.RequestPaused' event.
+	await self._log_step(target_data=target_data, message=f"Started to handle for '{event}'")
 
-	This function determines which action(s) to take based on the `choose_action_func` defined
-	in the handler settings and executes the corresponding CDP command(s) (e.g., `fetch.continueRequest`, `fetch.failRequest`, `fetch.fulfillRequest`, `fetch.continueResponse`)
-	with arguments built by the associated parameter handlers. Multiple actions can potentially be executed
-	for a single paused request if specified by the `choose_action_func`.
+	try:
+		chosen_actions_func_names = handler_settings["actions_handler"]["choose_action_func"](self, target_data, event)
+		await self._log_step(target_data=target_data, message=f"Chosen actions: '{chosen_actions_func_names}'")
 
-	Args:
-		self ("DevTools"): The DevTools instance.
-		cdp_session (CdpSession): The active CDP session where the event occurred.
-		handler_settings (_RequestPaused): The configuration settings for this 'RequestPaused' event handler.
-		event (Any): The 'fetch.RequestPaused' event object received from the CDP session.
-	"""
-	
-	chosen_actions_func_names = handler_settings["actions_handler"]["choose_action_func"](self, event)
-	
-	for action_func_name in chosen_actions_func_names:
-		chosen_action_func = handler_settings["actions_handler"]["actions"][action_func_name]
-		kwargs = await chosen_action_func["kwargs_func"](self, chosen_action_func["parameters_handlers"], event)
-		response_handle_func = chosen_action_func["response_handle_func"]
-	
-		try:
-			response = await execute_cdp_command(
-					"raise",
-					cdp_session,
-					self.get_devtools_object(f"fetch.{action_func_name}"),
-					**kwargs
-			)
-	
-			if response_handle_func is not None:
-				self._nursery_object.start_soon(response_handle_func, self, response)
-		except (Exception,) as error:
-			on_error = handler_settings["on_error_func"]
-	
-			if on_error is not None:
-				on_error(self, event, error)
+		for action_func_name in chosen_actions_func_names:
+			chosen_action_func = handler_settings["actions_handler"]["actions"][action_func_name]
+
+			kwargs = await chosen_action_func["kwargs_func"](self, target_data, chosen_action_func["parameters_handlers"], event)
+			await self._log_step(target_data=target_data, message=f"Kwargs for '{action_func_name}': '{kwargs}'")
+
+			response_handle_func = chosen_action_func["response_handle_func"]
+
+			try:
+				response = await execute_cdp_command(
+						self,
+						target_data,
+						"raise",
+						await self.get_devtools_object(f"fetch.{action_func_name}"),
+						**kwargs
+				)
+				await self._log_step(target_data=target_data, message=f"Function '{action_func_name}' response: '{response}'")
+
+				if response_handle_func is not None:
+					self._nursery_object.start_soon(response_handle_func, self, response)
+			except (trio.Cancelled, trio.EndOfChannel, CdpConnectionClosed):
+				pass
+			except (Exception,) as error:
+				await self._log_error(target_data=target_data)
+
+				on_error = handler_settings["on_error_func"]
+
+				if on_error is not None:
+					on_error(self, target_data, event, error)
+	except (Exception,) as error:
+		await self._log_error(target_data=target_data)
+		raise error
 
 
 @dataclass
@@ -1236,7 +1251,7 @@ request_paused_actions_literal = Literal[
 	"continue_response"
 ]
 auth_required_actions_literal = Literal["continue_with_auth"]
-request_paused_choose_action_func_type = Callable[["DevTools", Any], list[request_paused_actions_literal]]
-auth_required_choose_action_func_type = Callable[["DevTools", Any], list[auth_required_actions_literal]]
-handle_request_paused_func_type = Callable[["DevTools", CdpSession, _RequestPaused, Any], Awaitable[None]]
-handle_auth_required_func_type = Callable[["DevTools", CdpSession, _AuthRequired, Any], Awaitable[None]]
+request_paused_choose_action_func_type = Callable[["DevTools", TargetData, Any], list[request_paused_actions_literal]]
+auth_required_choose_action_func_type = Callable[["DevTools", TargetData, Any], list[auth_required_actions_literal]]
+handle_request_paused_func_type = Callable[["DevTools", TargetData, _RequestPaused, Any], Awaitable[None]]
+handle_auth_required_func_type = Callable[["DevTools", TargetData, _AuthRequired, Any], Awaitable[None]]
