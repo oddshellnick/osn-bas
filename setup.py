@@ -31,7 +31,7 @@ def get_description() -> str:
 
 setup(
 		name="osn-bas",
-		version="2.1.2-beta.6",
+		version="2.1.2-beta.7",
 		author="oddshellnick",
 		author_email="oddshellnick.programming@gmail.com",
 		description=get_description(),
